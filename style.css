@@ -1,0 +1,107 @@
+/* ============================================================
+   音乐跳动 · 样式表（霓虹暗黑风，见 CLAUDE.md 第七章）
+   ============================================================ */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #0a0a14;
+  font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  -webkit-user-select: none; user-select: none;
+  touch-action: none;                      /* 手机上防止滑动/缩放页面 */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 游戏画布：铺满全屏 */
+canvas { position: fixed; inset: 0; display: block; }
+
+/* 覆盖层界面（开始 / 结束共用） */
+.screen {
+  position: fixed; inset: 0; z-index: 10;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 22px; text-align: center;
+  background: radial-gradient(ellipse at center, rgba(0, 229, 255, 0.07), rgba(7, 7, 15, 0.88) 72%);
+}
+
+.hidden { display: none !important; }
+
+/* 游戏标题：霓虹发光大字 */
+.title {
+  font-size: clamp(3.2rem, 12vw, 6.5rem);
+  font-weight: 900; letter-spacing: 0.12em;
+  color: #00e5ff;
+  text-shadow: 0 0 10px #00e5ff, 0 0 34px #00e5ff, 0 0 80px rgba(0, 229, 255, 0.55);
+  animation: titleGlow 2.4s ease-in-out infinite;
+}
+@keyframes titleGlow {
+  0%, 100% { text-shadow: 0 0 10px #00e5ff, 0 0 34px #00e5ff, 0 0 80px rgba(0, 229, 255, 0.55); }
+  50%      { text-shadow: 0 0 14px #00e5ff, 0 0 48px #00e5ff, 0 0 110px rgba(0, 229, 255, 0.85); }
+}
+
+/* 结束界面标题：红色警示发光 */
+.title-over {
+  font-size: clamp(2.4rem, 9vw, 4.5rem);
+  font-weight: 900; letter-spacing: 0.1em;
+  color: #ff3355;
+  text-shadow: 0 0 10px #ff3355, 0 0 36px rgba(255, 51, 85, 0.7);
+}
+
+/* 分数与说明文字 */
+#best-score, #final-best { color: #8a8fb8; font-size: 1.05rem; letter-spacing: 0.05em; }
+#best-value, #final-best-value { color: #ffd54a; font-weight: 700; }
+#final-score {
+  color: #00e5ff; font-size: clamp(2rem, 7vw, 3.2rem); font-weight: 800;
+  text-shadow: 0 0 14px rgba(0, 229, 255, 0.7);
+}
+#new-record {
+  color: #ffd54a; font-size: 1.3rem; font-weight: 700;
+  animation: blink 0.9s ease-in-out infinite;
+}
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.hint { color: #c8cbe8; font-size: clamp(0.95rem, 3vw, 1.2rem); }
+.hint-sub { color: #6a6f9a; font-size: clamp(0.8rem, 2.6vw, 1rem); }
+
+/* 按钮：霓虹描边 + 发光 */
+.btn {
+  padding: 14px 58px; font-size: 1.25rem; letter-spacing: 0.15em;
+  color: #00e5ff; background: transparent;
+  border: 2px solid #00e5ff; border-radius: 12px;
+  cursor: pointer; transition: all 0.15s ease;
+  box-shadow: 0 0 12px rgba(0, 229, 255, 0.3), inset 0 0 12px rgba(0, 229, 255, 0.1);
+}
+.btn:hover, .btn:active {
+  background: rgba(0, 229, 255, 0.14);
+  box-shadow: 0 0 26px rgba(0, 229, 255, 0.6), inset 0 0 18px rgba(0, 229, 255, 0.22);
+  transform: scale(1.04);
+}
+.btn-ghost { color: #5a5f8a; border-color: #3a3f6a; box-shadow: none; }
+.btn-ghost:hover, .btn-ghost:active {
+  background: rgba(90, 95, 138, 0.12);
+  box-shadow: 0 0 14px rgba(90, 95, 138, 0.4);
+}
+
+/* 游戏内 HUD（不拦截点击） */
+#hud { position: fixed; inset: 0; z-index: 5; pointer-events: none; }
+#score {
+  position: absolute; top: 18px; left: 24px;
+  font-size: clamp(1.6rem, 5vw, 2.2rem); font-weight: 800;
+  color: #00e5ff; text-shadow: 0 0 12px rgba(0, 229, 255, 0.8);
+}
+#combo {
+  position: absolute; top: 24px; right: 24px;
+  font-size: clamp(1.1rem, 3.5vw, 1.5rem); font-weight: 700;
+  color: #ff2fd6; text-shadow: 0 0 12px rgba(255, 47, 214, 0.8);
+}
+#progress-bar {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 5px;
+  background: rgba(255, 255, 255, 0.06);
+}
+#progress-fill {
+  height: 100%; width: 0%;
+  background: linear-gradient(90deg, #00e5ff, #ff2fd6);
+  box-shadow: 0 0 10px #00e5ff;
+}

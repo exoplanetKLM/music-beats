@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>音乐跳动</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 游戏画布：所有画面都画在这里 -->
+  <canvas id="game"></canvas>
+
+  <!-- 游戏内 HUD：分数 / 连击 / 进度条（悬浮在画布上） -->
+  <div id="hud" class="hidden">
+    <div id="score">0</div>
+    <div id="combo" class="hidden">0 连击</div>
+    <div id="progress-bar"><div id="progress-fill"></div></div>
+  </div>
+
+  <!-- 开始界面 -->
+  <div id="menu" class="screen">
+    <h1 class="title">音乐跳动</h1>
+    <p id="best-score">最高分 <span id="best-value">0</span></p>
+    <button id="btn-start" class="btn btn-primary">开始游戏</button>
+    <p class="hint">踩中节拍得分，躲开障碍！</p>
+    <p class="hint-sub">电脑：点击 / 空格键跳跃　·　手机：点屏幕跳跃</p>
+  </div>
+
+  <!-- 结束界面 -->
+  <div id="gameover" class="screen hidden">
+    <h1 class="title-over">游戏结束</h1>
+    <p id="final-score"></p>
+    <p id="new-record" class="hidden">🎉 新纪录！</p>
+    <p id="final-best">最高分 <span id="final-best-value">0</span></p>
+    <button id="btn-restart" class="btn btn-primary">再来一局</button>
+    <button id="btn-home" class="btn btn-ghost">返回首页</button>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>

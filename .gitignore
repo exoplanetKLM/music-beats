@@ -1,0 +1,6 @@
+# 系统与编辑器临时文件（不需要提交到 git）
+Thumbs.db
+.DS_Store
+*.log
+.vscode/
+.idea/
