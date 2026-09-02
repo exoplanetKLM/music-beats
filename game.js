@@ -11,9 +11,10 @@
 
    结构：
      1. 配置常量（所有可调数值集中在这里）
-     2. 节拍时间表（三阶段 BPM 120/128/136）
-     3. 关卡生成（每一拍安排什么：节拍点 / 障碍）
-     4. 音乐引擎（Web Audio 程序合成 + 预计算事件表）
+     2. 节拍时间表（歌曲模式：按节拍分析的拍表；降级模式：BPM 120）
+     3. 关卡生成（每一拍安排什么：节拍点 / 地面障碍 / 浮空障碍）
+     4. 音乐引擎（歌曲模式：内嵌 MP3 + 节拍分析对齐循环；
+                 降级模式：Web Audio 程序合成 + 预计算事件表）
      5. 游戏状态与实体
      6. 更新逻辑（物理 / 判定 / 计分 / 死亡）
      7. 渲染（霓虹暗黑画面 + 粒子特效）
@@ -30,7 +31,9 @@ const CONFIG = {
 
   // —— 跳跃物理（CLAUDE.md 第三章：高度 3 倍方块、时长 0.5 秒）——
   jumpDuration: 0.5,
-  jumpBuffer: 0.1,          // 落地前 0.1 秒内的按键会被记住，落地瞬间起跳
+  jumpBuffer: 0.15,         // 空中按键缓冲：落地前 0.15 秒内的按键在落地瞬间起跳
+                            // （稍大于一帧，吸收落地瞬间的浮点误差；再早的按键忽略，
+                            //  避免把提前按键转成「落地即跳」撞上障碍）
 
   // —— 节拍点几何 ——
   noteHeightFactor: 2,      // 节拍点中心高度 = 方块尺寸 × 2（地面以上）
@@ -48,17 +51,24 @@ const CONFIG = {
   maxComboMult: 5,          // 倍率上限 ×5
 
   // —— 音乐（CLAUDE.md 第四章）——
-  bpmStage1: 120, bpmStage2: 128, bpmStage3: 136,
+  // 歌曲模式：T-ara《No.9》内嵌循环（song-data.js，节拍分析自动对齐）；
+  // 降级模式（歌曲加载/分析失败时）：程序合成，BPM 120
+  bpm: 120,
   stage1Beats: 64,          // 简单：0-63 拍
   stage2Beats: 64,          // 中等：64-127 拍
-  stage3Beats: 128,         // 困难：128-255 拍（之后循环困难段）
-  eventBeats: 320,          // 预计算的音乐事件总拍数（约 2 分半）
+  stage3Beats: 64,          // 困难：128-191 拍
+  stage4Beats: 64,          // 极难：192-255 拍（之后循环极难段）
+  eventBeats: 320,          // 预计算的音乐事件总拍数（约 2 分 40 秒）
 
-  // —— 实体飞行 ——
-  travelBeats: 2,           // 元素从屏幕右缘飞到方块处需要 2 拍
-  speedRamp: 1.2,           // 全程速度倍率 1.0 → 1.2 线性提升
+  // —— 实体飞行（匀速：难度不再靠加速，改由障碍承担）——
+  travelTime: 1.0,          // 元素从屏幕右缘飞到方块处固定 1 秒
   noteOffset: 0.1,          // 元素到达方块的时间比鼓点晚 0.1 秒
                             // （这样「在鼓点上按键」时画面正好接触）
+
+  // —— 浮空障碍（CLAUDE.md 第二章：中后期随机出现，2026-09-02 新增）——
+  floatingStartBeat: 64,    // 第 64 拍（中等阶段）起可能出现
+  floatingRampBeats: 128,   // 概率爬坡拍数：第 192 拍达到上限
+  floatingMaxChance: 0.4,   // 浮空概率上限 40%
 
   // —— 障碍几何与死亡（CLAUDE.md 第二章）——
   obstacleHeightFactor: 1.2, // 障碍高度 = 方块尺寸 × 1.2
@@ -73,52 +83,115 @@ const CONFIG = {
 
 /* ---------- 2. 节拍时间表 ---------- */
 
-const TOTAL_BEATS = CONFIG.stage1Beats + CONFIG.stage2Beats + CONFIG.stage3Beats; // 256
+const TOTAL_BEATS =
+  CONFIG.stage1Beats + CONFIG.stage2Beats + CONFIG.stage3Beats + CONFIG.stage4Beats; // 256
 
-// 每拍一个时间点（秒）。三阶段 BPM：120 → 128 → 136
-const beatTimes = [0];
-for (let i = 1; i < TOTAL_BEATS; i++) {
-  beatTimes.push(beatTimes[i - 1] + 60 / bpmForBeat(i));
+// 手动微调（节拍分析不准时使用，正常保持 0）：
+//   bpm > 0   用指定 BPM 重建拍表
+//   offset > 0 把首拍挪到指定秒数
+const SONG_TUNE = { bpm: 0, offset: 0 };
+
+// 一「轮」的长度（秒，进度条用）：歌曲模式 = 256 拍 × 实际拍距
+function roundLength() {
+  const s = AudioEngine.song;
+  if (s && s.beats) return TOTAL_BEATS * (s.loopLen / s.beats.length);
+  return TOTAL_BEATS * (60 / CONFIG.bpm);
 }
-const SONG_LENGTH = beatTimes[TOTAL_BEATS - 1]; // ≈ 118 秒（约 2 分钟一轮）
 
-function bpmForBeat(i) {
-  if (i < CONFIG.stage1Beats) return CONFIG.bpmStage1;
-  if (i < CONFIG.stage1Beats + CONFIG.stage2Beats) return CONFIG.bpmStage2;
-  return CONFIG.bpmStage3;
-}
-
-// 256 拍之后：按 136 BPM 无限延伸（游戏能玩多久，音乐就响多久）
+// 节拍时间：歌曲模式按节拍分析出的真实鼓点拍表（循环回绕，与听到的音乐严格同步）；
+// 降级模式按固定 BPM 线性延伸（游戏能玩多久，音乐就响多久）
 function beatTime(i) {
-  if (i < TOTAL_BEATS) return beatTimes[i];
-  return beatTimes[TOTAL_BEATS - 1] + (i - (TOTAL_BEATS - 1)) * (60 / CONFIG.bpmStage3);
+  const s = AudioEngine.song;
+  if (s && s.beats) {
+    const n = s.beats.length;
+    return s.beats[i % n] - s.beats[0] + Math.floor(i / n) * s.loopLen;
+  }
+  return i * (60 / CONFIG.bpm);
 }
 
 /* ---------- 3. 关卡生成（每一拍的安排，纯函数） ----------
-   密度递进（CLAUDE.md 第五章难度曲线）：
-     简单（0-63 拍, 120BPM）：偶数拍一个节拍点；每 12 拍一个障碍（与节拍点同拍）
-     中等（64-127 拍, 128BPM）：偶数拍一个节拍点；每 8 拍两个障碍
-                             （k=3 独立障碍 + k=6 与节拍点同拍）
-     困难（128+ 拍, 136BPM）：偶数拍一个节拍点；每 8 拍三个障碍
-                             （k=5 → k=6 连拍障碍，最高难度的节奏考验）
-   节拍点间隔 2 拍 ≥ 0.88 秒，跳跃时长 0.5 秒，密度已验证物理可行。 */
-function patternForBeat(i) {
-  if (i < 4) return { note: false, obstacle: false }; // 开局 4 拍留白热身
-  let b = i;
-  if (b >= TOTAL_BEATS) {
-    b = CONFIG.stage1Beats + CONFIG.stage2Beats + ((b - TOTAL_BEATS) % CONFIG.stage3Beats);
-  }
+   难度递进（CLAUDE.md 第五章：移动匀速，难度由障碍数量与浮空障碍承担）：
+     简单（0-63 拍）：偶数拍一个节拍点；每 12 拍一个障碍（b%12=6）
+     中等（64-127 拍）：节拍点 k=0/3/4/7；每 8 拍两个障碍（k=2、k=6）
+     困难（128-191 拍）：节拍点 k=0/4/7；每 8 拍三个障碍（k=2、k=3 连拍、k=6）
+     极难（192-255 拍，之后循环本段）：节拍点 k=0/4；每 8 拍四个障碍（k=2→3、k=6→7 连拍）
+   排布铁律（防必死连跳）：任何障碍的前 1 拍不能有节拍点——跳跃 0.5 秒恰好 1 拍，
+     踩完点再跳障碍的窗口只有几十毫秒，实测必死。障碍一律安排在「前拍无节拍点」
+     的位置（节拍点表格与障碍槽位表错开）；节拍点安排在障碍后方 ≥1 拍处（踩漏
+     只断连击，不致死）。浮空障碍同样遵守「前拍无节拍点、无地面障碍」。
+   浮空障碍（2026-09-02 新增）：第 64 拍起，障碍按概率（线性爬坡至 40%）转为
+     浮空形态——悬在节拍点高度，贴地通过安全、起跳撞上即死（「别跳」的反向考验）。
+   互斥规则（用户确认 2026-09-02）：节拍点与障碍不能出现在同一竖直方向。
+   浮空与否用确定性散列 beatRand(i) 决定——同一拍永远同一结果，函数保持纯函数。 */
+
+// 256 拍后：循环极难段（后期难度稳定在最高档）
+function remapBeat(i) {
+  if (i < TOTAL_BEATS) return i;
+  return CONFIG.stage1Beats + CONFIG.stage2Beats + CONFIG.stage3Beats +
+    ((i - TOTAL_BEATS) % CONFIG.stage4Beats);
+}
+
+// 该拍是否安排障碍槽位（数量随阶段递增；槽位前 1 拍均无节拍点）
+function slotGroundAt(b) {
   const k = b % 8;
-  const note = (k % 2 === 0); // 节拍点永远在偶数拍
-  let obstacle = false;
-  if (b < CONFIG.stage1Beats) {
-    if (b % 12 === 6) obstacle = true;
-  } else if (b < CONFIG.stage1Beats + CONFIG.stage2Beats) {
-    if (k === 3 || k === 6) obstacle = true;
-  } else {
-    if (k === 3 || k === 5 || k === 6) obstacle = true;
+  if (b < CONFIG.stage1Beats) return (b % 12 === 6);
+  if (b < CONFIG.stage1Beats + CONFIG.stage2Beats) return (k === 2 || k === 6);
+  if (b < CONFIG.stage1Beats + CONFIG.stage2Beats + CONFIG.stage3Beats) {
+    return (k === 2 || k === 3 || k === 6);
   }
-  return { note, obstacle };
+  return (k === 2 || k === 3 || k === 6 || k === 7);
+}
+
+// 该拍是否安排节拍点（按阶段表；与障碍槽位错开，障碍前 1 拍无节拍点）
+function noteAt(b) {
+  const k = b % 8;
+  if (b < CONFIG.stage1Beats) return (k % 2 === 0);
+  if (b < CONFIG.stage1Beats + CONFIG.stage2Beats) return (k === 0 || k === 3 || k === 4 || k === 7);
+  if (b < CONFIG.stage1Beats + CONFIG.stage2Beats + CONFIG.stage3Beats) {
+    return (k === 0 || k === 4 || k === 7);
+  }
+  return (k === 0 || k === 4);
+}
+
+// 确定性伪随机：同一拍永远得到同一个 [0,1) 值
+function beatRand(i) {
+  let x = Math.imul(i + 1, 0x9E3779B1) >>> 0;
+  x = Math.imul(x ^ (x >>> 16), 0x21F0AAAD);
+  x = Math.imul(x ^ (x >>> 15), 0x735A2D97);
+  return ((x ^ (x >>> 15)) >>> 0) / 4294967296;
+}
+
+// 浮空概率：第 floatingStartBeat 拍起线性爬坡，floatingRampBeats 拍后封顶
+function floatingChanceAt(i) {
+  if (i < CONFIG.floatingStartBeat) return 0;
+  return CONFIG.floatingMaxChance *
+    Math.min(1, (i - CONFIG.floatingStartBeat) / CONFIG.floatingRampBeats);
+}
+
+// 该拍是否命中浮空概率（最终还要过「前拍约束」）
+function wantsFloatAt(i) {
+  return beatRand(i) < floatingChanceAt(i);
+}
+
+// prev = 上一拍的生成结果（spawnUpcoming 顺序调用时传入；留白拍传 undefined）
+function patternForBeat(i, prev) {
+  const none = { note: false, obstacle: false, float: false };
+  if (i < 4) return none; // 开局 4 拍留白热身
+  const prevP = prev || none;
+  const b = remapBeat(i);
+
+  const obstacle = slotGroundAt(b);
+  let float = false;
+  if (obstacle) {
+    // 浮空要求前一拍无需起跳（前拍是节拍点或地面障碍 → 玩家起跳后来不及落地；
+    // 节拍点由排布保证不出现在槽位前，这里主要拦连拍障碍的前一障碍）
+    const prevBusy = prevP.note || (prevP.obstacle && !prevP.float);
+    if (!prevBusy && wantsFloatAt(i)) float = true;
+  }
+
+  const note = noteAt(b) && !obstacle; // 互斥：节拍点与障碍不同拍
+
+  return { note, obstacle, float };
 }
 
 /* ---------- 4. 音乐引擎（程序合成，见 CLAUDE.md 第四章） ---------- */
@@ -127,6 +200,7 @@ const AudioEngine = {
   ctx: null, master: null, session: null, noise: null,
   schedulerId: null, running: false,
   songStart: 0, eventIndex: 0, events: [],
+  song: null, songLoaded: false, songFailed: false, songSource: null, // 内嵌歌曲模式
 
   // 惰性创建：必须在用户点击「开始游戏」后调用（浏览器自动播放策略）
   ensure() {
@@ -135,6 +209,29 @@ const AudioEngine = {
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) return false;
       this.ctx = new AC();
+      // 音频从挂起中恢复时的自愈：若停摆期间游戏时钟（墙钟兜底）已走到音乐前面，
+      // 把音乐起点重锚到游戏时钟，未来音乐事件与画面重新对齐；
+      // 正常暂停/恢复时两者无差，这里是空操作。同时续上音乐调度器。
+      this.ctx.onstatechange = () => {
+        if (this.ctx.state !== 'running') return;
+        if (this.running) {
+          const gap = songTimeFallback - (this.ctx.currentTime - this.songStart);
+          if (gap > 0.05) {
+            // 音频停摆期间游戏时钟（墙钟兜底）已走到音乐前面：把时间轴重锚到游戏时钟
+            if (this.songLoaded && this.songSource) {
+              // 歌曲模式：重启音源到与游戏时钟一致的位置
+              const pos = this.song.beats[0] + (songTimeFallback % this.song.loopLen);
+              try { this.songSource.stop(); } catch (e) {}
+              this.songSource = null;
+              this.startSong(this.ctx.currentTime, pos);
+            }
+            this.songStart = this.ctx.currentTime - songTimeFallback;
+          }
+          if (!this.schedulerId && !this.songLoaded) {
+            this.schedulerId = setInterval(schedulerTick, 25);
+          }
+        }
+      };
       this.master = this.ctx.createGain();
       this.master.gain.value = 0.55;
       const comp = this.ctx.createDynamicsCompressor(); // 防止多声部叠加破音
@@ -147,7 +244,154 @@ const AudioEngine = {
       return true;
     } catch (e) { return false; }
   },
+
+  // 加载内嵌歌曲（data URL）并做节拍分析（页面加载时调用一次）
+  async loadSong() {
+    if (this.songLoaded || this.songFailed) return;
+    if (typeof window.SONG_DATA !== 'string') { this.songFailed = true; return; }
+    try {
+      const bytes = await fetch(window.SONG_DATA).then((r) => r.arrayBuffer());
+      const audio = await this.ctx.decodeAudioData(bytes);
+      const info = analyzeBeats(audio);
+      if (!info || info.beats.length < 32) { this.songFailed = true; return; }
+      let beats = info.beats;
+      if (SONG_TUNE.bpm > 0 || SONG_TUNE.offset > 0) {
+        // 手动微调：按给定 BPM / 首拍重建拍表
+        const d = SONG_TUNE.bpm > 0 ? 60 / SONG_TUNE.bpm : beats[1] - beats[0];
+        const start = SONG_TUNE.offset > 0 ? SONG_TUNE.offset : beats[0];
+        const arr = [];
+        for (let t = start; t < audio.duration - d; t += d) arr.push(t);
+        beats = arr;
+      }
+      const n = beats.length;
+      const period = beats[n - 1] - beats[n - 2];
+      this.song = {
+        audio, beats,
+        loopLen: n * period, // 循环段 = 整拍数（回归后拍距严格均匀，循环点即拍点）
+        bpm: 60 / period,
+      };
+      this.songLoaded = true;
+    } catch (e) { this.songFailed = true; }
+  },
+
+  // 启动歌曲音源：从 offset（首个强拍）开始播放，循环到拍表末尾 + 1 拍
+  startSong(t0, offset) {
+    const s = this.song;
+    const src = this.ctx.createBufferSource();
+    src.buffer = s.audio;
+    src.loop = true;
+    src.loopStart = s.beats[0];
+    src.loopEnd = Math.min(s.audio.duration, s.beats[0] + s.loopLen);
+    src.connect(this.session);
+    src.start(t0, offset);
+    this.songSource = src;
+  },
 };
+
+/* —— 节拍分析（内嵌歌曲）——
+   能量包络差分（onset 强度）→ 自相关求 BPM → 相位对齐 → 逐拍追踪 →
+   迭代重加权回归。恒定速度的电子舞曲拍点严格均匀，回归把逐拍抓取的
+   抖动（±20~60ms）消到 ≈0，并锁定主网格（离群游走段权重收敛到 0）。
+   返回 { bpm, beats }：beats = 每拍在音频内的绝对时间（秒）。 */
+function analyzeBeats(audio) {
+  const sr = audio.sampleRate;
+  const ch = audio.getChannelData(0);
+  const hop = Math.max(256, Math.round(sr / 86)); // ≈11.6ms 一帧
+  const hopSec = hop / sr;
+  const frames = Math.floor(ch.length / hop);
+  const duration = ch.length / sr;
+  if (frames < 2000) return null;
+
+  // 1) 能量包络 + onset 强度（正向能量差分）
+  const env = new Float64Array(frames);
+  for (let f = 0; f < frames; f++) {
+    let sum = 0; const off = f * hop;
+    for (let j = 0; j < hop; j += 8) { const v = ch[off + j]; sum += v * v; }
+    env[f] = Math.sqrt(sum / (hop / 8));
+  }
+  const flux = new Float64Array(frames);
+  let fluxMax = 0;
+  for (let f = 1; f < frames; f++) {
+    flux[f] = Math.max(0, env[f] - env[f - 1]);
+    if (flux[f] > fluxMax) fluxMax = flux[f];
+  }
+  const sigFlux = 0.2 * fluxMax; // 显著 onset 阈值（首个强拍判定）
+
+  // 2) BPM 粗估：自相关（90~170 BPM）+ 抛物线精修
+  function corrAt(lag) {
+    let s = 0; const n = frames - lag;
+    for (let f = 0; f < n; f += 4) s += flux[f] * flux[f + lag];
+    return s;
+  }
+  const minLag = Math.round((60 / 170) / hopSec);
+  const maxLag = Math.round((60 / 90) / hopSec);
+  let bestLag = minLag, bestScore = -Infinity;
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    const s = corrAt(lag);
+    if (s > bestScore) { bestScore = s; bestLag = lag; }
+  }
+  const s0 = corrAt(bestLag - 1), s2 = corrAt(bestLag + 1);
+  const denom = s0 - 2 * bestScore + s2;
+  const lagRef = bestLag + (denom !== 0 ? (0.5 * (s0 - s2)) / denom : 0);
+  const beatDur = lagRef * hopSec;
+
+  // 3) 相位：候选相位扫描（每拍独立取整，无累积漂移）
+  const K = Math.max(2, Math.round(beatDur / hopSec));
+  let bestPhase = 0, bestSum = -Infinity;
+  for (let p = 0; p < K; p++) {
+    let sum = 0;
+    for (let t = p * hopSec; t < duration; t += beatDur) {
+      const f = Math.round(t / hopSec);
+      if (f < frames) sum += flux[f];
+    }
+    if (sum > bestSum) { bestSum = sum; bestPhase = p * hopSec; }
+  }
+
+  // 4) 逐拍追踪：从首个强拍开始，每拍在网格 ±0.18 拍内找局部最强 onset。
+  //    固定周期 + 逐拍重锚（小误差不累积）；窗口够不到半拍的踩镲/反拍；
+  //    弱拍维持网格位置不被带偏。
+  const beats = [];
+  const maxBeatT = duration - 2 * beatDur;
+  const snapThresh = 0.12 * fluxMax; // 低于此强度的 onset 不抓取（防弱拍带偏网格）
+  let t = bestPhase, started = false;
+  while (t < maxBeatT) {
+    const f0 = Math.round(t / hopSec);
+    const rad = Math.round((0.18 * beatDur) / hopSec);
+    let bestF = f0, bestV = flux[f0] || 0;
+    for (let f = Math.max(0, f0 - rad); f <= Math.min(frames - 1, f0 + rad); f++) {
+      if (flux[f] > bestV) { bestV = flux[f]; bestF = f; }
+    }
+    if (bestV < snapThresh) bestF = f0; // 无显著 onset：保持网格位置
+    const tHit = bestF * hopSec;
+    if (!started && bestV >= sigFlux) { beats.length = 0; started = true; } // 首个强拍：网格从这里开始
+    if (started) beats.push(tHit);
+    t = tHit + beatDur;
+  }
+  if (beats.length < 32) return null;
+
+  // 5) 迭代重加权回归：锁定主网格，消掉逐拍抖动与游走段
+  const n = beats.length;
+  const diffs = [];
+  for (let i = 8; i < n; i++) diffs.push((beats[i] - beats[i - 8]) / 8); // 8 拍间隔抗离群
+  diffs.sort((x, y) => x - y);
+  let b = diffs[Math.floor(diffs.length / 2)]; // 初始斜率：中位数
+  let a = beats[0];
+  for (let iter = 0; iter < 6; iter++) {
+    let W = 0, WX = 0, WY = 0, WXY = 0, WXX = 0;
+    for (let i = 0; i < n; i++) {
+      const r = Math.abs(beats[i] - (a + i * b));
+      const w = r < 0.08 ? 1 : (r < 0.15 ? (0.15 - r) / 0.07 : 0);
+      W += w; WX += w * i; WY += w * beats[i]; WXY += w * i * beats[i]; WXX += w * i * i;
+    }
+    if (W < n * 0.2) break;
+    b = (W * WXY - WX * WY) / (W * WXX - WX * WX);
+    a = (WY - b * WX) / W;
+  }
+  let ok = 0;
+  for (let i = 0; i < n; i++) if (Math.abs(beats[i] - (a + i * b)) < 0.05) ok++;
+  if (ok > n * 0.6) for (let i = 0; i < n; i++) beats[i] = a + i * b; // 用回归直线替换逐拍结果
+  return { bpm: 60 / b, beats };
+}
 
 // —— 和弦进行：Am → F → C → G，每小节（4 拍）换一个，循环 ——
 const CHORDS = [
@@ -292,6 +536,7 @@ function schedulerTick() {
 function startMusic() {
   const c = AudioEngine;
   if (c.schedulerId) clearInterval(c.schedulerId);
+  if (c.songSource) { try { c.songSource.stop(); } catch (e) {} c.songSource = null; }
   // 若上一局音乐还连着（连点两次开始），先淡出旧通道，避免两路声音叠响
   if (c.session) {
     const old = c.session;
@@ -301,15 +546,21 @@ function startMusic() {
   }
   c.eventIndex = 0;
   c.songStart = c.ctx.currentTime + CONFIG.leadIn;
+  songTimeFallback = -CONFIG.leadIn; // 与音乐起点对齐（开局准备时间内为负值）
   c.session = c.ctx.createGain(); // 每局一个独立音量通道
   c.session.gain.value = 1;
   c.session.connect(c.master);
   c.running = true;
-  c.schedulerId = setInterval(schedulerTick, 25);
+  if (c.songLoaded) {
+    c.startSong(c.songStart, c.song.beats[0]); // 歌曲模式：从首个强拍开始（跳过前奏）
+  } else {
+    c.schedulerId = setInterval(schedulerTick, 25); // 降级：程序合成音乐
+  }
 }
 
 function fadeOutMusic() { // 死亡 / 返回首页时淡出本局音乐
   const c = AudioEngine;
+  if (c.songSource) { try { c.songSource.stop(); } catch (e) {} c.songSource = null; }
   if (c.session) {
     const s = c.session;
     s.gain.setTargetAtTime(0, c.ctx.currentTime, 0.06);
@@ -320,8 +571,18 @@ function fadeOutMusic() { // 死亡 / 返回首页时淡出本局音乐
   c.running = false;
 }
 
+// 游戏时钟：正常情况下跟随音频时钟（音画严格同步）。当音频上下文被浏览器或
+// 系统意外挂起（切后台、系统音频中断、自动挂起等）时，音频时钟停摆——此时由
+// update() 用墙钟兜底推进本变量，游戏画面与跳跃绝不冻结；音频恢复后由
+// ensure() 里的 onstatechange 重锚 songStart，音画自动重新对齐。
+let songTimeFallback = 0;
+let resumeRetryAt = 0; // 音频停摆时周期性重试 resume 的时机（游戏时间）
 function songTime() {
-  return AudioEngine.ctx ? AudioEngine.ctx.currentTime - AudioEngine.songStart : 0;
+  const c = AudioEngine.ctx;
+  if (c && c.state === 'running') {
+    songTimeFallback = c.currentTime - AudioEngine.songStart; // 音频在走：跟随音频时钟
+  }
+  return songTimeFallback;
 }
 
 /* ---------- 5. 游戏状态与实体 ---------- */
@@ -334,6 +595,7 @@ const S = {
   entities: [],             // { type, start, dur, judged, beatT }
   particles: [], texts: [], trail: [],
   spawnIndex: 0,            // 下一个要生成的拍号
+  lastPat: { note: false, obstacle: false, float: false }, // 上一拍的生成结果（浮空约束用）
   beatCursor: 0,            // 当前已响起的拍号（用于画面脉动）
   worldOffset: 0,           // 网格滚动偏移
   flash: 0, shake: 0, deathAt: 0,
@@ -377,13 +639,16 @@ function isGrounded() {
 function pressJump() {
   if (S.phase !== 'playing') return;
   if (isGrounded()) { S.jumpStart = songTime(); S.jumpBufferUntil = -1; }
-  else S.jumpBufferUntil = songTime() + CONFIG.jumpBuffer; // 空中按键 → 落地即跳
+  // 空中按键 → 落地瞬间起跳（仅限落地前 jumpBuffer 秒内）：
+  // 「节拍点后 1 拍紧跟障碍」的连跳需要这层缓冲，但窗口保持短小，
+  // 更早的按键直接忽略——否则会把误按/连点转成落地即跳，撞上紧随的障碍。
+  else S.jumpBufferUntil = songTime() + CONFIG.jumpBuffer;
 }
 
-// 当前世界速度（元素飞行速度随 BPM 与进度提升）
+// 当前世界速度：全程匀速（元素从右缘飞到方块处固定 travelTime 秒，
+// 难度不再靠加速，改由障碍数量与浮空障碍承担）
 function speedNow() {
-  const mult = 1 + (CONFIG.speedRamp - 1) * Math.min(1, Math.max(0, songTime()) / SONG_LENGTH);
-  return (W - playerX) / (CONFIG.travelBeats * (60 / bpmForBeat(S.spawnIndex)) / mult);
+  return (W - playerX) / CONFIG.travelTime;
 }
 
 // 按到达时间反推出生时间，到点就把该拍的元素放进屏幕
@@ -395,9 +660,10 @@ function spawnUpcoming() {
     const travelT = (W - playerX) / speedNow();
     const spawnT = arrival - travelT;
     if (t < spawnT) break;
-    const p = patternForBeat(b);
+    const p = patternForBeat(b, S.lastPat); // 前拍结果用于浮空障碍的公平性约束
+    S.lastPat = p;
     if (p.note) S.entities.push({ type: 'note', start: spawnT, dur: travelT, judged: false, beatT: beatTime(b) });
-    if (p.obstacle) S.entities.push({ type: 'obstacle', start: spawnT, dur: travelT });
+    if (p.obstacle) S.entities.push({ type: 'obstacle', float: p.float, start: spawnT, dur: travelT });
     S.spawnIndex++;
     if (S.spawnIndex > 100000) break; // 保险丝
   }
@@ -444,13 +710,23 @@ function die() {
 }
 
 function update(dt) {
+  // 音频时钟停摆自愈：画面与跳跃改用墙钟兜底推进（游戏绝不冻结），
+  // 并周期性尝试把音频拉回来（覆盖 'suspended' / iOS 的 'interrupted' 等状态）。
+  const ac = AudioEngine.ctx;
+  if (ac && ac.state !== 'running') {
+    songTimeFallback += dt;
+    if (S.phase === 'playing' && ac.state !== 'closed' && songTimeFallback >= resumeRetryAt) {
+      resumeRetryAt = songTimeFallback + 0.5;
+      ac.resume().catch(() => {});
+    }
+  }
   const t = songTime();
 
   // 当前鼓点推进（画面脉动用）
   while (beatTime(S.beatCursor + 1) <= t) S.beatCursor++;
 
-  // 落地缓冲跳
-  if (S.phase === 'playing' && S.jumpBufferUntil > t && isGrounded()) {
+  // 落地缓冲跳（>= 吸收落地瞬间的浮点边界误差）
+  if (S.phase === 'playing' && S.jumpBufferUntil >= t && isGrounded()) {
     S.jumpStart = t; S.jumpBufferUntil = -1;
   }
   // 生成新元素
@@ -476,11 +752,18 @@ function update(dt) {
         else { applyHit(kind); S.entities.splice(i, 1); continue; }
       }
     } else if (S.phase === 'playing') {
-      // 障碍碰撞：方块下沿低于障碍顶部且横向重叠 → 游戏结束
+      // 障碍碰撞：横向重叠时按形态判定
       const halfW = (CONFIG.obstacleWidthFactor * squareSize + squareSize) / 2;
-      if (Math.abs(x - playerX) < halfW && playerH < CONFIG.obstacleHeightFactor * squareSize) {
-        die();
-        break;
+      if (Math.abs(x - playerX) < halfW) {
+        if (e.float) {
+          // 浮空障碍：贴地通过安全；方块顶部进入障碍下沿 → 游戏结束
+          const boxBottom = CONFIG.noteHeightFactor * squareSize - CONFIG.obstacleHeightFactor * squareSize / 2;
+          if (playerH + squareSize > boxBottom) { die(); break; }
+        } else if (playerH < CONFIG.obstacleHeightFactor * squareSize) {
+          // 地面障碍：方块下沿低于障碍顶部 → 游戏结束
+          die();
+          break;
+        }
       }
     }
     if (p > 1.6) S.entities.splice(i, 1); // 飞出屏幕后移除
@@ -596,13 +879,31 @@ function render() {
     } else {
       const ow = CONFIG.obstacleWidthFactor * squareSize;
       const oh = CONFIG.obstacleHeightFactor * squareSize;
-      const ox = x - ow / 2, oy = groundY - oh;
-      ctx.fillStyle = CONFIG.obstacleColor;
-      ctx.shadowColor = CONFIG.obstacleColor; ctx.shadowBlur = 14;
-      rr(ox, oy, ow, oh, 3); ctx.fill();
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = 'rgba(10,10,20,0.55)'; // 内芯警示条纹
-      ctx.fillRect(x - ow * 0.12, oy + oh * 0.16, ow * 0.24, oh * 0.68);
+      if (e.float) {
+        // 浮空障碍：悬在节拍点高度轻微浮动，贴地通过、起跳撞上
+        const oy = groundY - CONFIG.noteHeightFactor * squareSize - oh / 2
+          + Math.sin(t * 5 + e.start * 7) * 3;
+        const ox = x - ow / 2;
+        ctx.fillStyle = CONFIG.obstacleColor;
+        ctx.shadowColor = CONFIG.obstacleColor; ctx.shadowBlur = 14;
+        rr(ox, oy, ow, oh, 4); ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = 'rgba(10,10,20,0.55)'; // 内芯警示条纹
+        ctx.fillRect(x - ow * 0.12, oy + oh * 0.16, ow * 0.24, oh * 0.68);
+        // 上下警示线：强调「别跳，从下面过」
+        ctx.strokeStyle = 'rgba(255,51,85,0.45)';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(x - ow * 0.7, oy - 6); ctx.lineTo(x + ow * 0.7, oy - 6); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x - ow * 0.7, oy + oh + 6); ctx.lineTo(x + ow * 0.7, oy + oh + 6); ctx.stroke();
+      } else {
+        const ox = x - ow / 2, oy = groundY - oh;
+        ctx.fillStyle = CONFIG.obstacleColor;
+        ctx.shadowColor = CONFIG.obstacleColor; ctx.shadowBlur = 14;
+        rr(ox, oy, ow, oh, 3); ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = 'rgba(10,10,20,0.55)'; // 内芯警示条纹
+        ctx.fillRect(x - ow * 0.12, oy + oh * 0.16, ow * 0.24, oh * 0.68);
+      }
     }
   }
 
@@ -681,7 +982,7 @@ function updateHud() {
   } else {
     comboEl.classList.add('hidden');
   }
-  const pct = Math.max(0, Math.min(1, songTime() / SONG_LENGTH));
+  const pct = Math.max(0, Math.min(1, songTime() / roundLength()));
   progressFill.style.width = (pct * 100).toFixed(1) + '%';
 }
 
@@ -690,7 +991,9 @@ function startGame() {
   S.score = 0; S.combo = 0;
   S.entities = []; S.particles = []; S.texts = []; S.trail = [];
   S.spawnIndex = 0; S.beatCursor = 0; S.worldOffset = 0;
+  S.lastPat = { note: false, obstacle: false, float: false };
   S.jumpStart = -10; S.jumpBufferUntil = -1;
+  resumeRetryAt = 0;
   S.flash = 0; S.shake = 0;
   menuEl.classList.add('hidden');
   gameoverEl.classList.add('hidden');
@@ -764,23 +1067,36 @@ document.addEventListener('visibilitychange', () => {
     if (c.ctx.state === 'running') c.ctx.suspend().catch(() => {});
   } else {
     if (c.ctx.state === 'suspended') c.ctx.resume().catch(() => {});
-    if (c.running && !c.schedulerId) c.schedulerId = setInterval(schedulerTick, 25);
+    if (c.running && !c.schedulerId && !c.songLoaded) {
+      c.schedulerId = setInterval(schedulerTick, 25); // 仅降级模式需要合成器调度
+    }
   }
 });
 
 /* ---------- 启动 ---------- */
 
-AudioEngine.events = buildEvents();
+AudioEngine.events = buildEvents(); // 降级模式（程序合成）的事件表
+AudioEngine.ensure();               // 提前创建音频上下文（用户点击开始时再 resume）
+AudioEngine.loadSong();             // 异步加载内嵌歌曲并做节拍分析
 S.best = loadBest();
 bestValue.textContent = S.best;
 resize();
 
 let lastT = performance.now();
+let lastFrameError = '';
 function frame(now) {
   const dt = Math.min(0.05, (now - lastT) / 1000);
   lastT = now;
-  update(dt);
-  render();
+  try {
+    update(dt);
+    render();
+  } catch (err) {
+    // 任何一帧异常都不允许打断主循环（否则画面永久定格）；同类错误只打印一次
+    if (String(err) !== lastFrameError) {
+      lastFrameError = String(err);
+      console.error('帧异常（已跳过本帧）:', err);
+    }
+  }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
