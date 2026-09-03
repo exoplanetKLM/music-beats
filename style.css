@@ -50,8 +50,9 @@ canvas { position: fixed; inset: 0; display: block; }
 }
 
 /* 分数与说明文字 */
-#best-score, #final-best { color: #8a8fb8; font-size: 1.05rem; letter-spacing: 0.05em; }
-#best-value, #final-best-value { color: #ffd54a; font-weight: 700; }
+#final-best { color: #8a8fb8; font-size: 1.05rem; letter-spacing: 0.05em; }
+#final-best-song { color: #c8cbe8; }
+#final-best-value { color: #ffd54a; font-weight: 700; }
 #final-score {
   color: #00e5ff; font-size: clamp(2rem, 7vw, 3.2rem); font-weight: 800;
   text-shadow: 0 0 14px rgba(0, 229, 255, 0.7);
@@ -103,6 +104,23 @@ canvas { position: fixed; inset: 0; display: block; }
 }
 .btn-song.loading { cursor: wait; opacity: 0.75; }
 #btn-start:disabled { opacity: 0.45; cursor: wait; transform: none; }
+
+/* 各曲最高分小榜单（2026-09-03 新增：每首歌记录独立展示） */
+#best-list { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+#best-list-label { color: #6a6f9a; font-size: 0.9rem; letter-spacing: 0.3em; }
+#best-rows { display: flex; flex-direction: column; gap: 4px; min-width: 200px; }
+.best-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 14px; border-radius: 8px;
+  color: #8a8fb8; font-size: 0.95rem;
+  border: 1px solid transparent; transition: all 0.15s ease;
+}
+.best-row-value { color: #ffd54a; font-weight: 700; }
+.best-row.current {
+  color: #c8cbe8;
+  border-color: rgba(0, 229, 255, 0.35);
+  box-shadow: 0 0 8px rgba(0, 229, 255, 0.15);
+}
 
 /* 游戏内 HUD（不拦截点击） */
 #hud { position: fixed; inset: 0; z-index: 5; pointer-events: none; }

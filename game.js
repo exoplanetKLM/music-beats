@@ -93,7 +93,7 @@ const CONFIG = {
   leadIn: 1.0,               // 开局 1 秒准备时间（先见元素、再响音乐）
   deathPause: 0.9,           // 死亡后停顿 0.9 秒再弹出结算界面
 
-  bestKey: 'musicJumpBestScore',
+  bestKey: 'musicJumpBestScore', // 最高分记录前缀：每首歌一条，键 = 前缀 + 曲目 id
   songKey: 'musicJumpSong',  // 上次选择的背景音乐（localStorage）
 };
 
@@ -631,7 +631,9 @@ function songTime() {
 
 const S = {
   phase: 'menu',            // menu | playing | dying | over
-  score: 0, combo: 0, best: 0,
+  score: 0, combo: 0,
+  bests: {},                // 每首歌的最高分记录（id → 分数，2026-09-03 起独立计算）
+  bestRowEls: {},           // 小榜单行 DOM 引用（id → { row, val }）
   jumpStart: -10,           // 上一次起跳时刻（歌内时间）
   jumpBufferUntil: -1,      // 空中按键的缓冲截止时刻
   entities: [],             // { type, start, dur, judged, beatT }
@@ -654,7 +656,7 @@ const ctx = canvas.getContext('2d');
 const $ = (id) => document.getElementById(id);
 const hudEl = $('hud'), menuEl = $('menu'), gameoverEl = $('gameover');
 const scoreEl = $('score'), comboEl = $('combo'), progressFill = $('progress-fill');
-const bestValue = $('best-value'), finalScore = $('final-score');
+const finalScore = $('final-score'), finalBestSong = $('final-best-song');
 const finalBestValue = $('final-best-value'), newRecord = $('new-record');
 
 let W = 0, H = 0, squareSize = 40, playerX = 0, groundY = 0;
@@ -1069,11 +1071,22 @@ function render() {
 
 /* ---------- 8. 输入与界面流程 ---------- */
 
-function loadBest() {
-  try { return Number(localStorage.getItem(CONFIG.bestKey)) || 0; } catch (e) { return 0; }
+// 最高分记录按曲目分键（2026-09-03：每首歌的记录独立计算，互不影响）
+function bestKeyFor(id) {
+  return CONFIG.bestKey + ':' + id;
 }
-function saveBest(v) {
-  try { localStorage.setItem(CONFIG.bestKey, String(v)); } catch (e) {}
+function loadBest(id) {
+  try { return Number(localStorage.getItem(bestKeyFor(id))) || 0; } catch (e) { return 0; }
+}
+function saveBest(id, v) {
+  try { localStorage.setItem(bestKeyFor(id), String(v)); } catch (e) {}
+}
+function bestFor(id) {
+  return S.bests[id] || 0;
+}
+function songName(id) {
+  const s = SONGS.find((x) => x.id === id);
+  return s ? s.name : id;
 }
 function loadSongId() {
   try { return localStorage.getItem(CONFIG.songKey) || ''; } catch (e) { return ''; }
@@ -1108,6 +1121,7 @@ function selectSong(id) {
     else AudioEngine.song = cached;
     setStartEnabled(true);
     refreshSongButtons();
+    refreshBestList();
     return;
   }
   setStartEnabled(false);
@@ -1116,6 +1130,7 @@ function selectSong(id) {
     if (AudioEngine.songId === id) setStartEnabled(true);
   });
   refreshSongButtons();
+  refreshBestList();
 }
 
 function refreshSongButtons() {
@@ -1128,6 +1143,37 @@ function refreshSongButtons() {
     btn.classList.toggle('active', active);
     btn.classList.toggle('loading', loading);
     btn.textContent = loading ? entry.name + '…' : entry.name;
+  }
+}
+
+// —— 各曲最高分小榜单（2026-09-03 新增：每首歌的记录独立展示）——
+// 榜单行由 SONGS 生成（以后加歌自动扩展），启动时 build 一次，之后只刷新数值与高亮。
+function buildBestList() {
+  const box = $('best-rows');
+  box.innerHTML = '';
+  S.bestRowEls = {};
+  for (const s of SONGS) {
+    const row = document.createElement('p');
+    row.className = 'best-row';
+    row.setAttribute('data-song', s.id);
+    const name = document.createElement('span');
+    name.className = 'best-row-name';
+    name.textContent = s.name;
+    const val = document.createElement('span');
+    val.className = 'best-row-value';
+    row.appendChild(name);
+    row.appendChild(val);
+    box.appendChild(row);
+    S.bestRowEls[s.id] = { row, val };
+  }
+  refreshBestList();
+}
+function refreshBestList() {
+  for (const s of SONGS) {
+    const ref = S.bestRowEls[s.id];
+    if (!ref) continue;
+    ref.val.textContent = bestFor(s.id);
+    ref.row.classList.toggle('current', s.id === AudioEngine.songId);
   }
 }
 
@@ -1161,10 +1207,13 @@ function startGame() {
 function showGameOver() {
   S.phase = 'over';
   S.entities = []; // 清掉画面上遗留的元素，结算界面保持干净
-  const isNew = S.score > S.best;
-  if (isNew) { S.best = S.score; saveBest(S.best); }
+  // 纪录按本局所用歌曲独立对比/保存（游戏中选歌 UI 不可达，songId 即本局歌曲）
+  const runSong = AudioEngine.songId;
+  const isNew = S.score > bestFor(runSong);
+  if (isNew) { S.bests[runSong] = S.score; saveBest(runSong, S.score); }
   finalScore.textContent = S.score + ' 分';
-  finalBestValue.textContent = S.best;
+  finalBestSong.textContent = '《' + songName(runSong) + '》';
+  finalBestValue.textContent = bestFor(runSong);
   newRecord.classList.toggle('hidden', !isNew);
   hudEl.classList.add('hidden');
   gameoverEl.classList.remove('hidden');
@@ -1176,7 +1225,7 @@ function toMenu() {
   gameoverEl.classList.add('hidden');
   menuEl.classList.remove('hidden');
   hudEl.classList.add('hidden');
-  bestValue.textContent = S.best;
+  refreshBestList();
 }
 
 function startFromButton() {
@@ -1246,8 +1295,16 @@ AudioEngine.loadSong(AudioEngine.songId).then(() => {
   setStartEnabled(true);
 });
 refreshSongButtons();
-S.best = loadBest();
-bestValue.textContent = S.best;
+// 每首歌的最高分记录 + 旧全局最高分一次性迁移到《No.9》
+for (const s of SONGS) S.bests[s.id] = loadBest(s.id);
+try {
+  const legacy = Number(localStorage.getItem(CONFIG.bestKey)) || 0;
+  if (legacy > 0) {
+    if (legacy > S.bests.no9) { S.bests.no9 = legacy; saveBest('no9', legacy); }
+    localStorage.removeItem(CONFIG.bestKey);
+  }
+} catch (e) {}
+buildBestList();
 resize();
 
 let lastT = performance.now();

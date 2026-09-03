@@ -20,7 +20,6 @@
   <!-- 开始界面 -->
   <div id="menu" class="screen">
     <h1 class="title">音乐跳动</h1>
-    <p id="best-score">最高分 <span id="best-value">0</span></p>
     <div id="song-picker">
       <p id="song-picker-label">背景音乐</p>
       <div id="song-buttons">
@@ -28,6 +27,10 @@
         <button class="btn-song" data-song="sugar-free">Sugar Free</button>
         <button class="btn-song" data-song="sexy-love">Sexy Love</button>
       </div>
+    </div>
+    <div id="best-list">
+      <p id="best-list-label">各曲最高分</p>
+      <div id="best-rows"></div>
     </div>
     <button id="btn-start" class="btn btn-primary">开始游戏</button>
     <p class="hint">踩中节拍得分，躲开障碍！</p>
@@ -39,7 +42,7 @@
     <h1 class="title-over">游戏结束</h1>
     <p id="final-score"></p>
     <p id="new-record" class="hidden">🎉 新纪录！</p>
-    <p id="final-best">最高分 <span id="final-best-value">0</span></p>
+    <p id="final-best"><span id="final-best-song">《No.9》</span>最高分 <span id="final-best-value">0</span></p>
     <button id="btn-restart" class="btn btn-primary">再来一局</button>
     <button id="btn-home" class="btn btn-ghost">返回首页</button>
   </div>
