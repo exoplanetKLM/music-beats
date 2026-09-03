@@ -21,6 +21,14 @@
   <div id="menu" class="screen">
     <h1 class="title">音乐跳动</h1>
     <p id="best-score">最高分 <span id="best-value">0</span></p>
+    <div id="song-picker">
+      <p id="song-picker-label">背景音乐</p>
+      <div id="song-buttons">
+        <button class="btn-song" data-song="no9">No.9</button>
+        <button class="btn-song" data-song="sugar-free">Sugar Free</button>
+        <button class="btn-song" data-song="sexy-love">Sexy Love</button>
+      </div>
+    </div>
     <button id="btn-start" class="btn btn-primary">开始游戏</button>
     <p class="hint">踩中节拍得分，躲开障碍！</p>
     <p class="hint-sub">电脑：点击 / 空格键跳跃　·　手机：点屏幕跳跃</p>
@@ -37,6 +45,8 @@
   </div>
 
   <script src="song-data.js"></script>
+  <script src="song-data-sugar-free.js"></script>
+  <script src="song-data-sexy-love.js"></script>
   <script src="game.js"></script>
 </body>
 </html>

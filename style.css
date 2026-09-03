@@ -84,6 +84,26 @@ canvas { position: fixed; inset: 0; display: block; }
   box-shadow: 0 0 14px rgba(90, 95, 138, 0.4);
 }
 
+/* 背景音乐切换（2026-09-03 新增） */
+#song-picker { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+#song-picker-label {
+  color: #6a6f9a; font-size: 0.9rem; letter-spacing: 0.3em;
+}
+#song-buttons { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.btn-song {
+  padding: 9px 20px; font-size: 0.95rem; letter-spacing: 0.08em;
+  color: #8a8fb8; background: transparent;
+  border: 1.5px solid #3a3f6a; border-radius: 999px;
+  cursor: pointer; transition: all 0.15s ease;
+}
+.btn-song:hover { color: #c8cbe8; border-color: #5a5f8a; }
+.btn-song.active {
+  color: #ff2fd6; border-color: #ff2fd6;
+  box-shadow: 0 0 12px rgba(255, 47, 214, 0.45), inset 0 0 10px rgba(255, 47, 214, 0.12);
+}
+.btn-song.loading { cursor: wait; opacity: 0.75; }
+#btn-start:disabled { opacity: 0.45; cursor: wait; transform: none; }
+
 /* 游戏内 HUD（不拦截点击） */
 #hud { position: fixed; inset: 0; z-index: 5; pointer-events: none; }
 #score {
