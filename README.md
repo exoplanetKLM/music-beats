@@ -50,7 +50,7 @@ node embed-songs.js <MP3路径> <输出js路径> <全局变量名> <歌曲名>
 
 | 文件 | 说明 |
 |------|------|
-| index.html | 入口页（三界面 + 移动端 meta） |
+| index.html | 入口页（三界面 + 移动端 meta；在线版歌曲走 jsDelivr CDN 加速） |
 | style.css | 霓虹暗黑风样式 |
 | game.js | 游戏全部逻辑（物理 / 节拍 / 计分 / 音频引擎） |
 | song-data*.js | 内嵌歌曲 base64 数据（128kbps 重压版，**勿手改**；原始 320kbps 备份在本地 .audio-backup，未入库） |

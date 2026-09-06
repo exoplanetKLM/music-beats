@@ -33,12 +33,19 @@ html = html.replace(LINK_RE, () => '<style>\n' + css + '\n</style>');
 
 // 2) 内联 JS：按出现顺序提取并替换（歌曲数据必须在 game.js 之前，保序即保正确）
 //    </script 转义为防御性措施（base64 字母表不含 <，当前各文件均无此子串）
+//    歌曲脚本是 jsDelivr 绝对地址（在线版加速用）：按 URL 的文件名找本地同名文件内联，
+//    保证单文件完全离线可玩；其余 http(s) 外部脚本保持引用
 const tags = html.match(/<script[^>]*src="([^"]+)"[^>]*><\/script>/g) || [];
 let inlineCount = 0;
 for (const tag of tags) {
   const src = tag.match(/src="([^"]+)"/)[1];
-  if (/^https?:/i.test(src)) continue; // 外部脚本保持引用，不内联
-  const js = fs.readFileSync(src, 'utf8').replace(/<\/script/gi, '<\\/script');
+  let local = src;
+  if (/^https?:/i.test(src)) {
+    const base = path.basename(src);
+    if (fs.existsSync(base) && /\.js$/.test(base)) local = base;
+    else continue; // 其他外部脚本保持引用，不内联
+  }
+  const js = fs.readFileSync(local, 'utf8').replace(/<\/script/gi, '<\\/script');
   html = html.replace(tag, () => '<script>\n' + js + '\n</script>');
   inlineCount++;
 }

@@ -54,9 +54,12 @@
     <button id="btn-home" class="btn btn-ghost">返回首页</button>
   </div>
 
-  <script src="song-data.js"></script>
-  <script src="song-data-sugar-free.js"></script>
-  <script src="song-data-sexy-love.js"></script>
+  <!-- 歌曲数据（约 14MB）从 jsDelivr CDN 加载：国内比 GitHub Pages 快约 10 倍。
+       加载失败时游戏自动降级为程序合成音乐（game.js 内建后备）。
+       单文件打包（build-single.js）会把这三个脚本按本地同名文件内联。 -->
+  <script src="https://cdn.jsdelivr.net/gh/exoplanetKLM/music-beats@master/song-data.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/exoplanetKLM/music-beats@master/song-data-sugar-free.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/exoplanetKLM/music-beats@master/song-data-sexy-love.js"></script>
   <script src="game.js"></script>
 </body>
 </html>

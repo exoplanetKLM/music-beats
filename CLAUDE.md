@@ -133,7 +133,8 @@
 ## 八、技术方案（为后续开发定调）
 
 - **纯 HTML + CSS + JavaScript**：`index.html`、`style.css`、`game.js` + 三个内嵌歌曲数据文件（`song-data*.js`，由 `embed-songs.js` 从 MP3 生成，勿手改），全部放在本项目目录下。
-- 不依赖任何第三方库或框架；**无需安装任何开发工具**，双击 `index.html` 就能在浏览器打开玩。
+- **歌曲 CDN（2026-09-06）**：`index.html` 中三个歌曲脚本为 jsDelivr 绝对地址（在线版国内加载比 GitHub Pages 快约 10 倍；数据缺失时 game.js 自动降级为程序合成音乐）。`build-single.js` 按 URL 文件名内联本地同名文件，单文件产物仍全量内嵌、完全离线可玩。
+- 不依赖任何第三方库或框架；**无需安装任何开发工具**：目录内双击 `index.html` 可玩（歌曲经 CDN 加载，需联网；离线请用 `build-single.js` 产出的单文件）。
 - 画面：Canvas 2D 渲染，60 帧流畅运行。
 - 音乐：Web Audio API 实时合成。
 - 数据：localStorage 保存最高分。
