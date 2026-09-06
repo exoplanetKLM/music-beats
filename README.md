@@ -7,7 +7,7 @@
 
 ### 在线玩（推荐，手机电脑都行）
 
-点这个链接 → <https://exoplanetklm.gitee.io/the-music-beats/>（以 Pages 后台显示的地址为准）
+点这个链接 → <https://<GitHub用户名>.github.io/<仓库名>/>（部署后填入实际地址）
 
 - 首次加载约 37MB（内置三首歌），**建议用 Wi-Fi**：菜单秒出，稍等几秒即可点「开始游戏」
 - 微信里打不开就点右上角「…」→「在浏览器打开」
@@ -36,6 +36,16 @@ node build-single.js dist/music-beats.html    # 对方反馈文件名乱码时�
 node embed-songs.js <MP3路径> <输出js路径> <全局变量名> <歌曲名>
 ```
 
+## 在线部署（GitHub Pages，一次性设置）
+
+> 注：Gitee Pages 已停服，本仓库托管在 GitHub Pages。GitHub Pages 免费、链接永久有效、push 后自动更新。
+
+1. GitHub 上建一个公开仓库（如 `music-beats`），把本仓库推上去：`git remote add github <仓库地址>` → `git push github master`
+2. 仓库 Settings → Pages → Source 选「Deploy from a branch」→ 分支选 master、目录选 / (root) → Save
+3. 稍等 1~2 分钟，访问 `https://<用户名>.github.io/<仓库名>/` 即部署完成
+
+每次改完代码 `git push github master`，页面自动更新（无需手动操作）。
+
 ## 项目结构
 
 | 文件 | 说明 |
@@ -52,6 +62,6 @@ node embed-songs.js <MP3路径> <输出js路径> <全局变量名> <歌曲名>
 ## 常见问题
 
 - **打开很慢 / 开始按钮点不了**：37MB 资源还在加载，切 Wi-Fi 或稍等
-- **链接打不开**：Gitee Pages 可能因长期未更新而暂停，作者在 Gitee 后台「服务 → Gitee Pages」点「更新」即可
+- **链接 404 / 打不开**：确认仓库 Settings → Pages 已开启且分支/目录选对；改代码后 push 会自动更新，个别网络（移动数据）下 github.io 可能较慢，换 Wi-Fi 重试
 - **好友说文件名乱码**：用 `node build-single.js dist/music-beats.html` 重新生成 ASCII 文件名版再发
 - **最高分没了**：分数存在各设备浏览器本地（localStorage），换设备或清浏览器缓存会丢失
