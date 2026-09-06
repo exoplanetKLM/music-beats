@@ -9,7 +9,7 @@
 
 点这个链接 → <https://exoplanetKLM.github.io/music-beats/>
 
-- 首次加载约 37MB（内置三首歌），**建议用 Wi-Fi**：菜单秒出，稍等几秒即可点「开始游戏」
+- 首次加载约 14MB（内置三首歌，128kbps），**建议用 Wi-Fi**：菜单秒出，稍等几秒即可点「开始游戏」
 - 微信里打不开就点右上角「…」→「在浏览器打开」
 - iPhone 可以把链接「添加到主屏幕」，之后全屏启动体验最好
 
@@ -53,7 +53,7 @@ node embed-songs.js <MP3路径> <输出js路径> <全局变量名> <歌曲名>
 | index.html | 入口页（三界面 + 移动端 meta） |
 | style.css | 霓虹暗黑风样式 |
 | game.js | 游戏全部逻辑（物理 / 节拍 / 计分 / 音频引擎） |
-| song-data*.js | 内嵌歌曲 base64 数据（由 embed-songs.js 生成，**勿手改**） |
+| song-data*.js | 内嵌歌曲 base64 数据（128kbps 重压版，**勿手改**；原始 320kbps 备份在本地 .audio-backup，未入库） |
 | build-single.js | 单文件打包脚本 |
 | embed-songs.js | 歌曲数据生成脚本 |
 | CLAUDE.md | 产品设计文档 |
@@ -61,7 +61,7 @@ node embed-songs.js <MP3路径> <输出js路径> <全局变量名> <歌曲名>
 
 ## 常见问题
 
-- **打开很慢 / 开始按钮点不了**：37MB 资源还在加载，切 Wi-Fi 或稍等
+- **打开很慢 / 开始按钮点不了**：14MB 资源还在加载，切 Wi-Fi 或稍等
 - **链接 404 / 打不开**：确认仓库 Settings → Pages 已开启且分支/目录选对；改代码后 push 会自动更新，个别网络（移动数据）下 github.io 可能较慢，换 Wi-Fi 重试
 - **好友说文件名乱码**：用 `node build-single.js dist/music-beats.html` 重新生成 ASCII 文件名版再发
 - **最高分没了**：分数存在各设备浏览器本地（localStorage），换设备或清浏览器缓存会丢失

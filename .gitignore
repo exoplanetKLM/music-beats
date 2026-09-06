@@ -7,3 +7,6 @@ Thumbs.db
 
 # 单文件打包产物（37MB，本地按需用 build-single.js 重新生成，不进仓库）
 dist/
+
+# 原始 320kbps MP3 备份（压缩音频时提取，不进仓库）
+.audio-backup/
