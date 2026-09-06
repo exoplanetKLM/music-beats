@@ -4,3 +4,6 @@ Thumbs.db
 *.log
 .vscode/
 .idea/
+
+# 单文件打包产物（37MB，本地按需用 build-single.js 重新生成，不进仓库）
+dist/
