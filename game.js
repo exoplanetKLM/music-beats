@@ -65,6 +65,16 @@ const CONFIG = {
   noteGapBefore: 0.65,      // 节拍点到达后此秒数内不得有障碍到达（防踩点后连跳必死）
   noteGapAfter: 0.5,        // 障碍到达后此秒数内不得有节拍点到达（防跳跃未落地接踩点）
 
+  // —— 奖励时间（2026-09-20 新增：1/2/3 分钟各 15 秒无障碍，专心吃节拍点得分）——
+  bonusAtSec: [60, 120, 180],  // 触发时刻（歌内秒数，一局共三次，之后不再给）
+  bonusDuration: 15,           // 奖励时间时长（秒）
+  bonusClearMargin: 0.2,       // 窗口末尾额外清障余量（秒）：障碍碰撞半宽 = 0.9×方块尺寸，
+                               // 换算成时间最大约 0.17 秒（手机竖屏），不加会出现
+                               // 「窗口结束前几十毫秒被末尾障碍撞死」的判定
+  bonusNoteSpawnMin: 0.5,      // 奖励时间内节拍点间隔下限（= 跳跃时长，一跳接一跳）
+  bonusNoteSpawnMax: 0.8,      // 奖励时间内节拍点间隔上限（平时 0.7~1.4）
+  bonusStarChance: 0.3,        // 奖励时间内星形概率（平时 starChance = 0.15）
+
   // —— 音乐（CLAUDE.md 第四章）——
   // 歌曲模式：T-ara《No.9》内嵌循环（song-data.js，节拍分析自动对齐）；
   // 降级模式（歌曲加载/分析失败时）：程序合成，BPM 120
@@ -89,12 +99,33 @@ const CONFIG = {
   obstacleHeightFactor: 1.2, // 障碍高度 = 方块尺寸 × 1.2
   obstacleWidthFactor: 0.8,  // 障碍宽度 = 方块尺寸 × 0.8
 
+  // —— 蓝色巨障与护盾（2026-09-20 新增：1:30 后随机出现，跳不过去，必须开盾撞破）——
+  blueObstacleColor: '#2f7dff', // 蓝色巨障（特意区别于方块青 #00e5ff）
+  shieldColor: '#d8f6ff',    // 护盾光环
+  blueStartSec: 90,          // 1:30 之后开始出现（歌内秒数）
+  blueMinGap: 5,             // 出现间隔下限（秒）：不宜再低于护盾冷却（4 秒），
+                             // 否则「看到蓝墙就按 Q」会来不及（5 秒时余量 1 秒）
+  blueMaxGap: 9,             // 出现间隔上限（秒）
+  blueLead: 0.7,             // 到达时刻的提前量（秒）：≥ noteGapAfter，节拍点才躲得开；
+                             // 并进飞行时长（见 spawnBlueObstacle），不是提前站在右缘
+  blueHeightFactor: 3.6,     // 仅渲染用：碰撞对蓝墙一律致命（跳跃顶点 3×方块 → 跳不过去）
+  blueWidthFactor: 1.1,      // 宽度 = 方块尺寸 × 1.1
+  blueClearGap: 0.6,         // 与其它障碍到达时刻的最小间隔（防「刚跳完就要盾」）
+  blueRetryStep: 0.15,       // 冲突重试步长：须小于极难段的空档宽度，否则会跨过唯一空位
+  blueRetryLimit: 2.5,       // 连续重试上限（秒）：超时放弃本次、重新排期（防无限重试）
+  bluePostBonusGrace: 1.5,   // 奖励时间结束后此秒数内不出蓝色巨障
+  shieldDuration: 3,         // 护盾持续（秒）
+  shieldCooldown: 4,         // 冷却：从「按下」算起 4 秒后可再按（护盾结束后仅 1 秒空窗）
+  scoreBlueSmash: 400,       // 撞破得分（固定分，不吃连击倍率）
+
   // —— 流程 ——
   leadIn: 1.0,               // 开局 1 秒准备时间（先见元素、再响音乐）
   deathPause: 0.9,           // 死亡后停顿 0.9 秒再弹出结算界面
 
   bestKey: 'musicJumpBestScore', // 最高分记录前缀：每首歌一条，键 = 前缀 + 曲目 id
   songKey: 'musicJumpSong',  // 上次选择的背景音乐（localStorage）
+  songLoadTimeout: 12,       // 歌曲加载超时（秒）：超时先放行（用合成音乐开打），
+                             // 数据到位后自动换上——避免 CDN 慢/不通时菜单被卡死
 };
 
 /* ---------- 1.5 背景音乐曲库（2026-09-03 新增：开始界面可切换） ---------- */
@@ -528,8 +559,9 @@ function playLead(t, freq) {
   o2.start(t); o2.stop(t + 0.32);
 }
 function playBoom() { // 死亡爆音
-  const c = AudioEngine.ctx;
-  if (!c || !c.session) return;
+  // 注意：session / master / noise 都挂在 AudioEngine 上（不是 ctx 上）
+  const e = AudioEngine, c = e.ctx;
+  if (!c || !e.session) return;
   const t = c.currentTime;
   const o = c.createOscillator(), g = c.createGain();
   o.type = 'sine';
@@ -537,25 +569,57 @@ function playBoom() { // 死亡爆音
   o.frequency.exponentialRampToValueAtTime(30, t + 0.4);
   g.gain.setValueAtTime(0.8, t);
   g.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
-  o.connect(g).connect(c.session);
+  o.connect(g).connect(e.session);
   o.start(t); o.stop(t + 0.55);
   const s = c.createBufferSource(), g2 = c.createGain(), f = c.createBiquadFilter();
-  s.buffer = c.noise; f.type = 'lowpass'; f.frequency.value = 900;
+  s.buffer = e.noise; f.type = 'lowpass'; f.frequency.value = 900;
   g2.gain.setValueAtTime(0.5, t);
   g2.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
-  s.connect(f).connect(g2).connect(c.session);
+  s.connect(f).connect(g2).connect(e.session);
   s.start(t); s.stop(t + 0.35);
 }
 function playMiss() { // 漏拍提示音（小声）
-  const c = AudioEngine.ctx;
-  if (!c) return;
+  const e = AudioEngine, c = e.ctx;
+  if (!c || !e.session) return;
   const t = c.currentTime;
   const o = c.createOscillator(), g = c.createGain();
   o.type = 'sine'; o.frequency.value = 110;
   g.gain.setValueAtTime(0.12, t);
   g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
-  o.connect(g).connect(c.session || c.master);
+  o.connect(g).connect(e.session);
   o.start(t); o.stop(t + 0.15);
+}
+function playShield() { // 开盾：短促上扬音
+  const e = AudioEngine, c = e.ctx;
+  if (!c || !e.session) return;
+  const t = c.currentTime;
+  const o = c.createOscillator(), g = c.createGain();
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(320, t);
+  o.frequency.exponentialRampToValueAtTime(880, t + 0.14);
+  g.gain.setValueAtTime(0.18, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+  o.connect(g).connect(e.session);
+  o.start(t); o.stop(t + 0.2);
+}
+function playSmash() { // 撞破蓝色巨障：低频冲击 + 带通噪声爆裂
+  const e = AudioEngine, c = e.ctx;
+  if (!c || !e.session) return;
+  const t = c.currentTime;
+  const o = c.createOscillator(), g = c.createGain();
+  o.type = 'square';
+  o.frequency.setValueAtTime(220, t);
+  o.frequency.exponentialRampToValueAtTime(90, t + 0.18);
+  g.gain.setValueAtTime(0.3, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+  o.connect(g).connect(e.session);
+  o.start(t); o.stop(t + 0.25);
+  const s = c.createBufferSource(), f = c.createBiquadFilter(), g2 = c.createGain();
+  s.buffer = e.noise; f.type = 'bandpass'; f.frequency.value = 1800;
+  g2.gain.setValueAtTime(0.28, t);
+  g2.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+  s.connect(f).connect(g2).connect(e.session);
+  s.start(t); s.stop(t + 0.2);
 }
 
 // —— 调度器：每 25ms 把未来 0.15s 内的音乐事件安排给音频硬件 ——
@@ -647,6 +711,16 @@ const S = {
   beatCursor: 0,            // 当前已响起的拍号（用于画面脉动）
   worldOffset: 0,           // 网格滚动偏移
   flash: 0, shake: 0, deathAt: 0,
+  bonusIdx: 0,              // 下一个待触发的奖励时间序号（CONFIG.bonusAtSec 下标）
+  bonusStart: -Infinity,    // 本次奖励时间开始时刻（-Infinity = 未激活）
+  bonusUntil: -Infinity,    // 本次奖励时间结束时刻（必须 -Infinity：开局 leadIn 期间 songTime 为负）
+  bonusOn: false,           // 上一帧是否处于奖励时间（用于「结束」播报）
+  lastNoteArrival: -Infinity, // 上一个节拍点到达时刻（防止窗口开启瞬间双押）
+  nextBlueAt: CONFIG.blueStartSec, // 下一根蓝色巨障的排布时刻（1:30 前不排）
+  shieldUntil: -Infinity,   // 护盾生效截止时刻（-Infinity = 无盾）
+  shieldReadyAt: -Infinity, // 下次可以开盾的时刻（冷却）
+  blueRetryFrom: -Infinity, // 本次排布尝试的起始时刻（blueRetryLimit 用）
+  blueSeen: false,          // 本局是否已播报过蓝墙教学提示
 };
 
 /* ---------- DOM 与画布 ---------- */
@@ -656,10 +730,18 @@ const ctx = canvas.getContext('2d');
 const $ = (id) => document.getElementById(id);
 const hudEl = $('hud'), menuEl = $('menu'), gameoverEl = $('gameover');
 const scoreEl = $('score'), comboEl = $('combo'), progressFill = $('progress-fill');
+const bonusEl = $('bonus'), bonusCountEl = $('bonus-count');
+const shieldStateEl = $('shield-state'), shieldBtnEl = $('shield-btn');
 const finalScore = $('final-score'), finalBestSong = $('final-best-song');
 const finalBestValue = $('final-best-value'), newRecord = $('new-record');
 
 let W = 0, H = 0, squareSize = 40, playerX = 0, groundY = 0;
+
+// 是否触屏设备（决定护盾提示文案；按钮显隐由 CSS 的 any-pointer 负责，见 style.css）
+function touchUI() {
+  return document.body.classList.contains('touch') ||
+    (window.matchMedia && window.matchMedia('(any-pointer: coarse)').matches);
+}
 
 function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -699,6 +781,40 @@ function speedNow() {
   return (W - playerX) / CONFIG.travelTime;
 }
 
+// —— 奖励时间（2026-09-20 新增）——
+// 到 1/2/3 分钟各开启 15 秒「无障碍」窗口：窗口内到达的障碍一律不落地，
+// 节拍点更密、星形更多、漏吃不断连击，让玩家专心吃分。
+function bonusActive(t) { return t < S.bonusUntil; } // t = songTime()
+
+// 窗口开启：清掉在飞的障碍 + 立刻开始出节拍点 + 金色开场信号。
+// 触发判定放在 update() 最前面，保证本帧就清场（不出现「先碰撞、后清场」的一帧差）。
+function startBonus(t) {
+  S.bonusStart = t;
+  S.bonusUntil = t + CONFIG.bonusDuration;
+  // 场上障碍立即清空：此刻在飞的障碍到达时刻必然 < 窗口结束（飞行仅 1 秒），
+  // 全部属于窗口内，删掉即与 spawnUpcoming 的抑制条件一致
+  S.entities = S.entities.filter((e) => e.type !== 'obstacle');
+  if (S.nextNoteAt > t) S.nextNoteAt = t; // 立刻开始生成节拍点，不空等最多 1.4 秒
+  S.flash = 0.5; S.shake = 0.25;
+  burst(playerX, groundY - squareSize, CONFIG.starColor, 26);
+  addText('奖励时间！', playerX, groundY - squareSize * 3.4, CONFIG.starColor);
+}
+
+function updateBonus(t) {
+  if (S.phase !== 'playing') { S.bonusOn = false; return; }
+  // 时钟可能一次跳过多个触发点（长时间卡顿 / 后台恢复）：过期窗口不补，只给最近一个
+  while (S.bonusIdx < CONFIG.bonusAtSec.length && t >= CONFIG.bonusAtSec[S.bonusIdx]) {
+    const stale = t - CONFIG.bonusAtSec[S.bonusIdx];
+    S.bonusIdx++;
+    if (stale <= CONFIG.bonusDuration) startBonus(t);
+  }
+  const on = bonusActive(t);
+  if (S.bonusOn && !on) {
+    S.bonusOn = false;
+    addText('奖励结束', playerX, groundY - squareSize * 3.4, CONFIG.starColor);
+  } else if (on) S.bonusOn = true;
+}
+
 // 按到达时间反推出生时间，到点就把该拍的障碍放进屏幕（节拍点改由 spawnNote 随机生成）。
 // 同时前瞻扫描未来 travelTime + 间隙内的障碍到达时刻，登记给随机节拍点避让查询。
 // 前瞻与主循环各自链式调用纯函数 patternForBeat：起点一致、顺序一致 → 结果必然一致。
@@ -712,13 +828,28 @@ function spawnUpcoming() {
     if (t < spawnT) break;
     const p = patternForBeat(b, S.lastPat); // 前拍结果用于浮空障碍的公平性约束
     S.lastPat = p;
-    if (p.obstacle) S.entities.push({ type: 'obstacle', float: p.float, start: spawnT, dur: travelT });
+    // 奖励时间：到达时刻落在窗口内（末尾留 bonusClearMargin 余量）的障碍不落地。
+    // 只抑制「落地」这一步：spawnIndex / lastPat / obstacleTimes 全部照常推进，
+    // 两条链始终同步，窗口结束无需重对齐。被抑制的障碍会在 obstacleTimes 里留下
+    // 「幽灵」项，由 spawnNote 的奖励时间分支跳过。
+    // 按「到达时刻」而非「出生时刻」判断：出生在窗口内、到达在窗口后的障碍必须照常
+    // 出生（窗口末尾的世界回归预告），否则 obstacleTimes 会留下幽灵记录压制节拍点。
+    const suppressed = p.obstacle && arrival >= S.bonusStart &&
+      arrival < S.bonusUntil + CONFIG.bonusClearMargin;
+    if (p.obstacle && !suppressed) {
+      S.entities.push({ type: 'obstacle', float: p.float, start: spawnT, dur: travelT });
+    }
     S.spawnIndex++;
     if (S.spawnIndex > 100000) break; // 保险丝
   }
-  // 障碍到达时间前瞻（供 spawnNote 避让；覆盖候选节拍点可能的全部冲突区间）
+  // 障碍到达时间前瞻（供 spawnNote 避让、蓝色巨障错开；覆盖候选节拍点可能的全部冲突区间）。
+  // 前瞻范围要比「节拍点需要的 travelTime + gap」更远一点：蓝色巨障的到达时刻提前
+  // blueLead 登记，还要与它前后 blueClearGap 内的障碍错开——只扫到 t+1.65 的话，
+  // 落在 (t+1.65, t+2.3] 的障碍查不到，蓝墙可能正好贴着一根红障碍到达。
+  // 多登记的条目对节拍点避让没有影响（冲突判定只看到达窗口内那几条）。
   const gap = Math.max(CONFIG.noteGapBefore, CONFIG.noteGapAfter);
-  while (beatTime(S.lookaheadIndex) + CONFIG.noteOffset <= t + CONFIG.travelTime + gap) {
+  const ahead = Math.max(gap, CONFIG.blueClearGap + CONFIG.blueLead);
+  while (beatTime(S.lookaheadIndex) + CONFIG.noteOffset <= t + CONFIG.travelTime + ahead) {
     const p = patternForBeat(S.lookaheadIndex, S.lookaheadPat);
     S.lookaheadPat = p;
     if (p.obstacle) S.obstacleTimes.push(beatTime(S.lookaheadIndex) + CONFIG.noteOffset);
@@ -732,25 +863,128 @@ function spawnUpcoming() {
 // 避让铁律：障碍到达前 noteGapBefore 秒 / 到达后 noteGapAfter 秒内不生成——
 // 否则「踩点后连跳障碍」或「跳障碍后接踩点」的窗口不足（必死/必漏）。
 // 冲突时以 noteRetryDelay 间隔重试（候选到达窗口逐帧前滑，天然滑入空档）。
+// 奖励时间内（2026-09-20）：间隔换成更密的 bonusNoteSpawnMin~Max、星形概率提升，
+// 避让铁律对「窗口之后的障碍」依然生效（只跳过窗口内的幽灵登记项）。
 function spawnNote() {
   const t = songTime();
   const gap = Math.max(CONFIG.noteGapBefore, CONFIG.noteGapAfter);
   while (S.obstacleTimes.length && S.obstacleTimes[0] < t - gap) S.obstacleTimes.shift();
   if (t < S.nextNoteAt) return;
+  const inBonus = bonusActive(t);
   const A = t + CONFIG.travelTime; // 候选到达时刻（立即从右缘出生）
+  // 奖励时间内 obstacleTimes 里「窗口末尾 + 余量」之前的登记项是幽灵（对应障碍已被
+  // 抑制），跳过；窗口之后的登记项照常避让——否则窗口最后一刻生成的节拍点会与
+  // 「窗口后第一根障碍」撞车（踩点与起跳互斥，必死）。阈值与 spawnUpcoming 的抑制
+  // 阈值取同一个数，保证「参与避让 ⇔ 障碍真实存在」。
+  const clearBefore = inBonus ? S.bonusUntil + CONFIG.bonusClearMargin : -Infinity;
   for (const O of S.obstacleTimes) {
+    if (O < clearBefore) continue; // 幽灵项：不参与避让
     if (O > A - CONFIG.noteGapBefore && O < A + CONFIG.noteGapAfter) {
       S.nextNoteAt = t + CONFIG.noteRetryDelay; // 与障碍冲突：稍后重试
       return;
     }
   }
-  const isStar = Math.random() < CONFIG.starChance;
+  // 奖励时间内再挡一层：窗口开启瞬间把 nextNoteAt 钳到当前时刻，避免与刚生成的
+  // 节拍点贴在一起（两个节拍点相差几十毫秒，画面上会叠在一起）
+  if (inBonus && A < S.lastNoteArrival + CONFIG.bonusNoteSpawnMin) {
+    S.nextNoteAt = t + CONFIG.noteRetryDelay;
+    return;
+  }
+  const isStar = Math.random() < (inBonus ? CONFIG.bonusStarChance : CONFIG.starChance);
   S.entities.push({
     type: isStar ? 'star' : 'note',
     start: t, dur: CONFIG.travelTime, judged: false,
     beatT: A - CONFIG.noteOffset, // 视觉接触前 0.1 秒按键 = Perfect（与原手感一致）
   });
-  S.nextNoteAt = t + CONFIG.noteSpawnMin + Math.random() * (CONFIG.noteSpawnMax - CONFIG.noteSpawnMin);
+  S.lastNoteArrival = A;
+  const lo = inBonus ? CONFIG.bonusNoteSpawnMin : CONFIG.noteSpawnMin;
+  const hi = inBonus ? CONFIG.bonusNoteSpawnMax : CONFIG.noteSpawnMax;
+  S.nextNoteAt = t + lo + Math.random() * (hi - lo);
+}
+
+// —— 蓝色巨障（2026-09-20 新增）——
+// 1:30 之后随机出现（间隔 blueMinGap~blueMaxGap 秒），跳不过去，只能开盾撞破。
+// 排布时不进节拍表（patternForBeat 是纯函数，不能掺时间条件），但到达时刻会提前
+// blueLead 秒登记进 obstacleTimes —— 节拍点避让只在生成时查一次表，早于登记生成的
+// 节拍点由 blueLead ≥ noteGapAfter(0.5) 保证落在避让窗口之外，不会出现「同一个位置
+// 既要踩点又要撞盾」。落点还要与其它障碍错开 blueClearGap，并躲开奖励时间窗口。
+function spawnBlueObstacle() {
+  const t = songTime();
+  if (S.phase !== 'playing' || t < S.nextBlueAt) return;
+  const travelT = (W - playerX) / speedNow(); // === CONFIG.travelTime（恒定）
+  const arrival = t + travelT + CONFIG.blueLead;
+  // 奖励时间（含窗口末尾的清障余量与结束后的静默期）：窗口内必须一个障碍都没有
+  if (arrival < S.bonusUntil + CONFIG.bluePostBonusGrace) {
+    S.nextBlueAt = S.bonusUntil + CONFIG.bluePostBonusGrace;
+    S.blueRetryFrom = -Infinity;
+    return;
+  }
+  // 也别把蓝墙排进「即将到来的」奖励时间窗口：窗口开启时会把它连同其它障碍一起清掉
+  // （所以绝不会撞到），但玩家会看到一个刚出现的蓝墙又凭空消失，还可能白按一次护盾。
+  // 触发时刻是固定日程（CONFIG.bonusAtSec），可以直接提前避开。
+  for (const at of CONFIG.bonusAtSec) {
+    if (arrival >= at && arrival < at + CONFIG.bonusDuration + CONFIG.bluePostBonusGrace) {
+      S.nextBlueAt = at + CONFIG.bonusDuration + CONFIG.bluePostBonusGrace;
+      S.blueRetryFrom = -Infinity;
+      return;
+    }
+  }
+  for (const O of S.obstacleTimes) {
+    if (Math.abs(O - arrival) < CONFIG.blueClearGap) { // 离其它障碍太近：稍后再试
+      if (S.blueRetryFrom < 0) S.blueRetryFrom = t;
+      if (t - S.blueRetryFrom > CONFIG.blueRetryLimit) {
+        // 空档挤不进去（快歌极难段空档很窄）：放弃本次，重新排期
+        S.blueRetryFrom = -Infinity;
+        S.nextBlueAt = t + CONFIG.blueMinGap + Math.random() * (CONFIG.blueMaxGap - CONFIG.blueMinGap);
+      } else S.nextBlueAt = t + CONFIG.blueRetryStep;
+      return;
+    }
+  }
+  S.blueRetryFrom = -Infinity;
+  // 「减速飞行」而非「提前站在右缘」：render 会把 p 钳在 Math.max(0,…)，提前出生的
+  // 话方块会在右缘静止 blueLead 秒，看起来像卡死。并进 dur 则匀速飞完、到达时刻不变。
+  S.entities.push({ type: 'obstacle', blue: true, start: t, dur: travelT + CONFIG.blueLead });
+  // obstacleTimes 不保证严格升序（下一帧前瞻仍可能压入更小的到达时刻），按序插入最稳
+  let k = S.obstacleTimes.length;
+  while (k > 0 && S.obstacleTimes[k - 1] > arrival) k--;
+  S.obstacleTimes.splice(k, 0, arrival);
+  S.nextBlueAt = t + CONFIG.blueMinGap + Math.random() * (CONFIG.blueMaxGap - CONFIG.blueMinGap);
+  if (!S.blueSeen) { // 首次出现播报一次（之后不再刷）
+    S.blueSeen = true;
+    addText(touchUI() ? '蓝色巨障！点右下按钮开盾' : '蓝色巨障！按 Q 开盾',
+      playerX, groundY - squareSize * 4.2, CONFIG.blueObstacleColor);
+  }
+}
+
+// 护盾（2026-09-20 新增）：随时可按，持续 shieldDuration 秒；
+// 冷却从「按下」算起 shieldCooldown 秒（= 3 秒护盾 + 1 秒空窗），
+// 不是「失效后再等 4 秒」——误按的代价被压到最小。
+function activateShield() {
+  if (S.phase !== 'playing') return;
+  const t = songTime();
+  if (t < S.shieldReadyAt) return; // 冷却中
+  S.shieldUntil = t + CONFIG.shieldDuration;
+  S.shieldReadyAt = t + CONFIG.shieldCooldown;
+  S.flash = Math.max(S.flash, 0.18);
+  burst(playerX, groundY - playerHeight() - squareSize / 2, CONFIG.shieldColor, 12);
+  if (!S.entities.some((e) => e.blue)) { // 空放提醒（蓝墙在场时才是刚需）
+    addText('护盾浪费了', playerX, groundY - squareSize * 3.4, '#8a8fb8');
+  }
+  playShield();
+}
+
+// 撞破蓝色巨障：固定加分（不吃连击倍率、也不动连击数——撞破不是节奏输入）、
+// 蓝白粒子、消耗护盾（早消耗早回冷，用得早不吃亏）。
+function smashBlue(t) {
+  S.shieldUntil = t;
+  S.shieldReadyAt = t + CONFIG.shieldCooldown;
+  S.score += CONFIG.scoreBlueSmash;
+  S.shake = Math.max(S.shake, 0.5);
+  S.flash = Math.max(S.flash, 0.18); // 别用 1：白闪是「死亡」的既有语义
+  burst(playerX, groundY - squareSize, CONFIG.blueObstacleColor, 26);
+  burst(playerX, groundY - squareSize, '#ffffff', 10);
+  addText('+' + CONFIG.scoreBlueSmash, playerX, groundY - squareSize * 2.2, CONFIG.blueObstacleColor);
+  playSmash();
 }
 
 function comboMult() {
@@ -785,17 +1019,22 @@ function applyHit(kind, e) {
     star ? (kind === 'perfect' ? 20 : 12) : (kind === 'perfect' ? 16 : 9));
 }
 function applyMiss() {
-  S.combo = 0;
-  addText('Miss', playerX, groundY - CONFIG.noteHeightFactor * squareSize - 34, '#666680');
+  // 奖励时间内漏吃节拍点不断连击（2026-09-20：奖励时间放心刷分，容错放宽）
+  const inBonus = bonusActive(songTime());
+  if (!inBonus) S.combo = 0;
+  addText(inBonus ? 'Miss · 连击保留' : 'Miss',
+    playerX, groundY - CONFIG.noteHeightFactor * squareSize - 34, '#666680');
   playMiss();
 }
 
-function die() {
+function die(hit) {
   if (S.phase !== 'playing') return;
   S.phase = 'dying';
   S.deathAt = songTime();
   S.flash = 1; S.shake = 1;
-  burst(playerX, groundY - squareSize, CONFIG.obstacleColor, 30);
+  // hit = 撞到的实体（可选）：撞蓝墙死时粒子用蓝，其余沿用红色警示
+  burst(playerX, groundY - squareSize,
+    (hit && hit.blue) ? CONFIG.blueObstacleColor : CONFIG.obstacleColor, 30);
   burst(playerX, groundY - squareSize, CONFIG.playerColor, 20);
   playBoom();
   fadeOutMusic();
@@ -814,6 +1053,9 @@ function update(dt) {
   }
   const t = songTime();
 
+  // 奖励时间：触发 / 清场 / 结束播报（必须早于 spawnUpcoming 与实体碰撞循环）
+  updateBonus(t);
+
   // 当前鼓点推进（画面脉动用）
   while (beatTime(S.beatCursor + 1) <= t) S.beatCursor++;
 
@@ -821,8 +1063,9 @@ function update(dt) {
   if (S.phase === 'playing' && S.jumpBufferUntil >= t && isGrounded()) {
     S.jumpStart = t; S.jumpBufferUntil = -1;
   }
-  // 生成新元素（障碍按节拍表，节拍点随机）
-  if (S.phase === 'playing') { spawnUpcoming(); spawnNote(); }
+  // 生成新元素（障碍按节拍表，节拍点随机，蓝色巨障独立随机排布）。
+  // 蓝墙排在节拍点之前：本帧生成的节拍点就已经能让开它。
+  if (S.phase === 'playing') { spawnUpcoming(); spawnBlueObstacle(); spawnNote(); }
 
   const playerH = playerHeight();
 
@@ -844,16 +1087,27 @@ function update(dt) {
         else { applyHit(kind, e); S.entities.splice(i, 1); continue; }
       }
     } else if (S.phase === 'playing') {
-      // 障碍碰撞：横向重叠时按形态判定
-      const halfW = (CONFIG.obstacleWidthFactor * squareSize + squareSize) / 2;
+      // 障碍碰撞：横向重叠时按形态判定（蓝墙更宽，阈值按各自宽度算）
+      const bw = e.blue ? CONFIG.blueWidthFactor : CONFIG.obstacleWidthFactor;
+      const halfW = (bw * squareSize + squareSize) / 2;
       if (Math.abs(x - playerX) < halfW) {
+        if (e.blue) {
+          // 蓝色巨障：高度 3.6×方块 > 跳跃顶点 3×，跳不过去——有盾撞破，没盾结束
+          if (t < S.shieldUntil) {
+            smashBlue(t);
+            S.entities.splice(i, 1);
+            continue; // 必须 continue：否则下面的 p>1.6 会对同一个 i 二次 splice，误删下一个实体
+          }
+          die(e);
+          break;
+        }
         if (e.float) {
           // 浮空障碍：贴地通过安全；方块顶部进入障碍下沿 → 游戏结束
           const boxBottom = CONFIG.noteHeightFactor * squareSize - CONFIG.obstacleHeightFactor * squareSize / 2;
-          if (playerH + squareSize > boxBottom) { die(); break; }
+          if (playerH + squareSize > boxBottom) { die(e); break; }
         } else if (playerH < CONFIG.obstacleHeightFactor * squareSize) {
           // 地面障碍：方块下沿低于障碍顶部 → 游戏结束
-          die();
+          die(e);
           break;
         }
       }
@@ -982,9 +1236,32 @@ function render() {
       ctx.shadowBlur = 0;
       ctx.globalAlpha = 1;
     } else {
-      const ow = CONFIG.obstacleWidthFactor * squareSize;
-      const oh = CONFIG.obstacleHeightFactor * squareSize;
-      if (e.float) {
+      // 蓝色巨障用自己的一套几何与配色（更宽更高的蓝柱），其余障碍沿用红色警示
+      const blue = !!e.blue;
+      const ow = (blue ? CONFIG.blueWidthFactor : CONFIG.obstacleWidthFactor) * squareSize;
+      const oh = (blue ? CONFIG.blueHeightFactor : CONFIG.obstacleHeightFactor) * squareSize;
+      const ocol = blue ? CONFIG.blueObstacleColor : CONFIG.obstacleColor;
+      if (blue) {
+        // 蓝色巨障：跳不过去的高墙，画成发光蓝柱 + 白色盾形内芯（提示「开盾撞破」）
+        const ox = x - ow / 2, oy = groundY - oh;
+        ctx.fillStyle = ocol;
+        ctx.shadowColor = ocol; ctx.shadowBlur = 22;
+        rr(ox, oy, ow, oh, 5); ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = 'rgba(232,246,255,0.9)'; // 白色盾形/亮条：这不是「跳过去」的东西
+        ctx.beginPath();
+        ctx.moveTo(x, oy + oh * 0.12);
+        ctx.lineTo(x + ow * 0.28, oy + oh * 0.24);
+        ctx.lineTo(x + ow * 0.28, oy + oh * 0.52);
+        ctx.quadraticCurveTo(x + ow * 0.28, oy + oh * 0.78, x, oy + oh * 0.9);
+        ctx.quadraticCurveTo(x - ow * 0.28, oy + oh * 0.78, x - ow * 0.28, oy + oh * 0.52);
+        ctx.lineTo(x - ow * 0.28, oy + oh * 0.24);
+        ctx.closePath(); ctx.fill();
+        // 顶部脉动光边：远处也能一眼认出
+        ctx.strokeStyle = 'rgba(232,246,255,' + (0.45 + 0.35 * Math.sin(t * 6)).toFixed(3) + ')';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(ox - 5, oy); ctx.lineTo(ox + ow + 5, oy); ctx.stroke();
+      } else if (e.float) {
         // 浮空障碍：悬在节拍点高度轻微浮动，贴地通过、起跳撞上
         const oy = groundY - CONFIG.noteHeightFactor * squareSize - oh / 2
           + Math.sin(t * 5 + e.start * 7) * 3;
@@ -1035,6 +1312,23 @@ function render() {
   const inset = squareSize * 0.16;
   rr(playerX - squareSize / 2 + inset, py + inset, squareSize - inset * 2, squareSize - inset * 2, squareSize * 0.1);
   ctx.fill();
+
+  // 护盾光环（2026-09-20 新增）：有盾时方块外圈套一层脉动白青光环
+  if (t < S.shieldUntil) {
+    const cy = py + squareSize / 2;
+    const r = squareSize * (0.92 + 0.06 * Math.sin(t * 9));
+    const fade = Math.min(1, (S.shieldUntil - t) / 0.4); // 最后 0.4 秒淡出，提示护盾要没了
+    ctx.globalAlpha = 0.35 + 0.5 * fade;
+    ctx.strokeStyle = CONFIG.shieldColor;
+    ctx.shadowColor = CONFIG.shieldColor; ctx.shadowBlur = 18;
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(playerX, cy, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.globalAlpha = 0.18 * fade; // 外圈光晕
+    ctx.lineWidth = 8;
+    ctx.beginPath(); ctx.arc(playerX, cy, r * 1.12, 0, Math.PI * 2); ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+  }
 
   // 粒子（叠加混合，更亮）
   ctx.globalCompositeOperation = 'lighter';
@@ -1096,6 +1390,7 @@ function saveSongId(v) {
 }
 
 function updateHud() {
+  const t = songTime();
   const s = String(S.score);
   if (scoreEl.textContent !== s) scoreEl.textContent = s;
   if (S.combo >= 2) {
@@ -1104,8 +1399,39 @@ function updateHud() {
   } else {
     comboEl.classList.add('hidden');
   }
-  const pct = Math.max(0, Math.min(1, songTime() / roundLength()));
+  const pct = Math.max(0, Math.min(1, t / roundLength()));
   progressFill.style.width = (pct * 100).toFixed(1) + '%';
+
+  // 奖励时间横幅：只在游戏中且窗口未结束时显示；最后 3 秒转红闪烁预警
+  const inBonus = S.phase === 'playing' && bonusActive(t);
+  bonusEl.classList.toggle('hidden', !inBonus);
+  if (inBonus) {
+    const left = S.bonusUntil - t;
+    const n = String(Math.ceil(left));
+    if (bonusCountEl.textContent !== n) bonusCountEl.textContent = n;
+    bonusEl.classList.toggle('warning', left <= 3);
+  }
+
+  // —— 护盾指示（2026-09-20 新增）——
+  // 三态：生效（金色倒计时）/ 冷却（灰色倒计时）/ 就绪；蓝墙在场且就绪时闪烁提醒开盾。
+  // 只在游戏中刷新（updateHud 在所有相位都会跑），文本相同就不写，避免逐帧重排。
+  const playing = S.phase === 'playing';
+  const shieldLeft = playing ? S.shieldUntil - t : -1;
+  const readyLeft = playing ? S.shieldReadyAt - t : -1;
+  let stText, stCls;
+  if (shieldLeft > 0) { stText = '护盾 ' + shieldLeft.toFixed(1) + ' 秒'; stCls = 'on'; }
+  else if (readyLeft > 0) { stText = '护盾冷却 ' + readyLeft.toFixed(1) + ' 秒'; stCls = 'cool'; }
+  else { stText = touchUI() ? '护盾就绪 · 点右下按钮' : '护盾就绪 · 按 Q'; stCls = 'ready'; }
+  if (playing) {
+    const blueNear = S.entities.some((e) => e.blue);
+    if (blueNear && stCls === 'ready') { stText = '按 Q 开盾！撞破蓝色巨障'; stCls = 'alert'; }
+    if (shieldStateEl.textContent !== stText) shieldStateEl.textContent = stText;
+    shieldStateEl.className = 'show ' + stCls;
+  } else if (shieldStateEl.className !== '') {
+    shieldStateEl.className = ''; // 非游戏相位：收起指示（#hud 本身也是隐藏的）
+  }
+  const btnCool = readyLeft > 0 && shieldLeft <= 0;
+  if (shieldBtnEl.classList.contains('cool') !== btnCool) shieldBtnEl.classList.toggle('cool', btnCool);
 }
 
 // —— 背景音乐切换（2026-09-03 新增）——
@@ -1125,12 +1451,32 @@ function selectSong(id) {
     return;
   }
   setStartEnabled(false);
-  AudioEngine.loadSong(id).then(() => { // 先发起加载（同步建立 loadPromises），再刷新按钮的 loading 态
-    refreshSongButtons();
-    if (AudioEngine.songId === id) setStartEnabled(true);
-  });
+  loadSongGuarded(id); // 先发起加载（同步建立 loadPromises），再刷新按钮的 loading 态
   refreshSongButtons();
   refreshBestList();
+}
+
+// —— 歌曲加载的兜底放行（2026-09-20）——
+// 解码分析期间禁用「开始游戏」是为了避免「选了歌却响合成音乐」；但歌曲数据走 CDN，
+// 慢或不通时不能把菜单无限期卡死（实测慢链路下 14MB 要几分钟）。所以加超时兜底：
+// 超时（或加载失败）就放行——先用程序合成音乐开打，并在开始界面标明原因；
+// 数据到位后由 __songDataReady 自动重新加载，装上真正的歌曲。
+function setSongHint(text) {
+  const el = $('song-hint');
+  el.textContent = text || '';
+  el.classList.toggle('hidden', !text);
+}
+
+function loadSongGuarded(id) {
+  const loaded = AudioEngine.loadSong(id);
+  const guard = new Promise((r) => setTimeout(() => r('timeout'), CONFIG.songLoadTimeout * 1000));
+  Promise.race([loaded, guard]).then((res) => {
+    refreshSongButtons();
+    if (AudioEngine.songId !== id) return; // 期间玩家又换了曲目，交给后来者处理
+    setStartEnabled(true);
+    setSongHint(res === true ? '' : '歌曲加载中…（可先玩，背景先用合成音乐）');
+  });
+  return loaded;
 }
 
 function refreshSongButtons() {
@@ -1193,6 +1539,12 @@ function startGame() {
   S.jumpStart = -10; S.jumpBufferUntil = -1;
   resumeRetryAt = 0;
   S.flash = 0; S.shake = 0;
+  S.bonusIdx = 0; S.bonusStart = -Infinity; S.bonusUntil = -Infinity;
+  S.bonusOn = false; S.lastNoteArrival = -Infinity;
+  S.nextBlueAt = CONFIG.blueStartSec; S.blueRetryFrom = -Infinity; S.blueSeen = false;
+  S.shieldUntil = -Infinity; S.shieldReadyAt = -Infinity;
+  bonusEl.classList.add('hidden'); bonusEl.classList.remove('warning');
+  shieldStateEl.className = ''; shieldBtnEl.classList.remove('cool');
   menuEl.classList.add('hidden');
   gameoverEl.classList.add('hidden');
   hudEl.classList.remove('hidden');
@@ -1254,11 +1606,27 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
     e.preventDefault();
     pressJump();
+  } else if (e.code === 'KeyQ') {
+    e.preventDefault();
+    activateShield(); // 护盾：电脑端 Q 键（CLAUDE.md 第三章）
   } else if (e.code === 'Enter') {
     if (S.phase === 'over') restartGame();
     else if (S.phase === 'menu') startFromButton();
   }
 });
+
+// 护盾按钮（手机）：只绑 pointerdown + preventDefault（不产生 click、不获取焦点，
+// 因此空格/回车不会被它二次触发）；按钮在 #hud 内、不是 canvas 子节点，
+// 所以点它不会连带触发跳跃。
+shieldBtnEl.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  activateShield();
+});
+// 触屏判定：any-pointer: coarse 已覆盖绝大多数情况，这里再用「真实触摸事件」兜底，
+// 保证触屏设备上按钮一定会出现（按钮不出现 = 手机玩家没有开盾手段）。
+document.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'touch') document.body.classList.add('touch');
+}, { once: true });
 
 $('btn-start').addEventListener('click', startFromButton);
 $('btn-restart').addEventListener('click', restartGame);
@@ -1289,11 +1657,14 @@ AudioEngine.ensure();               // 提前创建音频上下文（用户点�
 // 恢复上次选择的背景音乐并异步解码分析（加载完成前开始按钮禁用；失败则程序合成降级）
 const savedSongId = loadSongId();
 AudioEngine.songId = SONGS.some((s) => s.id === savedSongId) ? savedSongId : 'no9';
+// 歌曲脚本异步到达时自动接管（index.html 的加载器在这三个脚本 onload 时调用）
+window.__songDataReady = function () {
+  if (AudioEngine.songCache.has(AudioEngine.songId)) return; // 已经装好了
+  loadSongGuarded(AudioEngine.songId);
+};
 setStartEnabled(false);
-AudioEngine.loadSong(AudioEngine.songId).then(() => {
-  refreshSongButtons();
-  setStartEnabled(true);
-});
+loadSongGuarded(AudioEngine.songId);
+if (window.__songScriptsLoaded > 0) window.__songDataReady(); // 数据比 game.js 先到
 refreshSongButtons();
 // 每首歌的最高分记录 + 旧全局最高分一次性迁移到《No.9》
 for (const s of SONGS) S.bests[s.id] = loadBest(s.id);

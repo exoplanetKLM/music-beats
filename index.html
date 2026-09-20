@@ -21,6 +21,14 @@
   <div id="hud" class="hidden">
     <div id="score">0</div>
     <div id="combo" class="hidden">0 连击</div>
+    <!-- 奖励时间横幅（2026-09-20 新增）：金色标题 + 倒计时 -->
+    <div id="bonus" class="hidden">
+      <span id="bonus-title">★ 奖励时间 ★</span>
+      <span id="bonus-count">15</span>
+    </div>
+    <!-- 护盾（2026-09-20 新增）：电脑按 Q，手机点右下角按钮 -->
+    <div id="shield-state"></div>
+    <div id="shield-btn" role="button">护盾</div>
     <div id="progress-bar"><div id="progress-fill"></div></div>
   </div>
 
@@ -34,14 +42,22 @@
         <button class="btn-song" data-song="sugar-free">Sugar Free</button>
         <button class="btn-song" data-song="sexy-love">Sexy Love</button>
       </div>
+      <p id="song-hint" class="hidden"></p>
     </div>
     <div id="best-list">
       <p id="best-list-label">各曲最高分</p>
       <div id="best-rows"></div>
     </div>
     <button id="btn-start" class="btn btn-primary">开始游戏</button>
-    <p class="hint">踩中节拍得分，躲开障碍！</p>
-    <p class="hint-sub">电脑：点击 / 空格键跳跃　·　手机：点屏幕跳跃</p>
+    <!-- 玩法说明（2026-09-20 新增：原来只有一行「踩中节拍得分，躲开障碍！」） -->
+    <div id="how-to">
+      <p class="how-to-title">玩法说明</p>
+      <p>踩中节拍点得分，连击越高分越高（金星双倍）</p>
+      <p>躲开红色障碍（浮空障碍要贴地通过），碰到即结束</p>
+      <p>1:30 后蓝色巨障跳不过去：按 Q / 点右下按钮开盾撞破</p>
+      <p>护盾持续 3 秒（按下后 4 秒可再按），且只对蓝色巨障有效</p>
+      <p class="hint-sub">电脑：点击 / 空格 / ↑ / W 跳跃　·　手机：点屏幕跳跃</p>
+    </div>
   </div>
 
   <!-- 结束界面 -->
@@ -54,12 +70,29 @@
     <button id="btn-home" class="btn btn-ghost">返回首页</button>
   </div>
 
-  <!-- 歌曲数据（约 14MB）从 jsDelivr CDN 加载：国内比 GitHub Pages 快约 10 倍。
-       加载失败时游戏自动降级为程序合成音乐（game.js 内建后备）。
-       单文件打包（build-single.js）会把这三个脚本按本地同名文件内联。 -->
-  <script src="https://cdn.jsdelivr.net/gh/exoplanetKLM/music-beats@master/song-data.js"></script>
-  <script src="https://cdn.jsdelivr.net/gh/exoplanetKLM/music-beats@master/song-data-sugar-free.js"></script>
-  <script src="https://cdn.jsdelivr.net/gh/exoplanetKLM/music-beats@master/song-data-sexy-love.js"></script>
+  <!-- 歌曲数据（约 14MB）加载策略（2026-09-20 调整）：
+         · 本地双击（file://）：直接用同目录文件——零网络、秒开、离线可玩；
+         · 线上（GitHub Pages）：走 jsDelivr CDN（国内比 GitHub Pages 快约 10 倍），
+           并用 async 加载——CDN 再慢也不会卡住页面，游戏能立刻开打（先用程序合成
+           音乐），数据到位后由 game.js 的 __songDataReady 自动换上歌曲。
+       单文件打包（build-single.js）会把 SONG_DATA 标记之间的整段替换为三份内联数据。 -->
+  <!-- SONG_DATA:START -->
+  <script>
+    (function () {
+      var local = location.protocol === 'file:';
+      var base = 'https://cdn.jsdelivr.net/gh/exoplanetKLM/music-beats@master/';
+      var files = ['song-data.js', 'song-data-sugar-free.js', 'song-data-sexy-love.js'];
+      window.__songScriptsLoaded = 0;
+      for (var i = 0; i < files.length; i++) {
+        var src = local ? files[i] : base + files[i];
+        // 线上才需要 async（跨源慢链路不阻塞）；本地同步加载，保证 game.js 执行时数据就绪
+        var attr = local ? '' : ' async';
+        var done = ' onload="window.__songScriptsLoaded++;window.__songDataReady&&window.__songDataReady()"';
+        document.write('<script src="' + src + '"' + attr + done + '><\/script>');
+      }
+    })();
+  </script>
+  <!-- SONG_DATA:END -->
   <script src="game.js"></script>
 </body>
 </html>

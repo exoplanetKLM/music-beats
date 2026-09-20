@@ -17,14 +17,22 @@ html, body {
 /* 游戏画布：铺满全屏 */
 canvas { position: fixed; inset: 0; display: block; }
 
-/* 覆盖层界面（开始 / 结束共用） */
+/* 覆盖层界面（开始 / 结束共用）
+   2026-09-20：矮屏/横屏时内容会超出屏幕，原来 justify-content:center + 全局
+   overflow:hidden 会把标题裁掉且无法滚动。改成 flex-start + 首尾 auto 外边距：
+   内容够高时表现仍是垂直居中，内容溢出时自动塌成从顶部开始滚。 */
 .screen {
   position: fixed; inset: 0; z-index: 10;
   display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
+  align-items: center; justify-content: flex-start;
   gap: 22px; text-align: center;
+  overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y;
+  padding: 16px 12px;
   background: radial-gradient(ellipse at center, rgba(0, 229, 255, 0.07), rgba(7, 7, 15, 0.88) 72%);
 }
+.screen > :first-child { margin-top: auto; }
+.screen > :last-child { margin-bottom: auto; }
+@media (max-height: 700px) { .screen { gap: 14px; } }
 
 .hidden { display: none !important; }
 
@@ -90,6 +98,11 @@ canvas { position: fixed; inset: 0; display: block; }
 #song-picker-label {
   color: #6a6f9a; font-size: 0.9rem; letter-spacing: 0.3em;
 }
+/* 歌曲加载提示（2026-09-20）：CDN 慢/不通时告知「可先玩，背景是合成音乐」 */
+#song-hint {
+  margin: 6px 0 0; font-size: 0.8rem; color: #ffd54a;
+  text-shadow: 0 0 8px rgba(255, 213, 74, 0.5);
+}
 #song-buttons { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
 .btn-song {
   padding: 9px 20px; font-size: 0.95rem; letter-spacing: 0.08em;
@@ -122,6 +135,20 @@ canvas { position: fixed; inset: 0; display: block; }
   box-shadow: 0 0 8px rgba(0, 229, 255, 0.15);
 }
 
+/* 玩法说明（2026-09-20 新增：替换原来的一句「踩中节拍得分，躲开障碍！」）
+   每行 ≤ 25 字，360px 宽不折行；比 .hint 稍小一档，避免矮屏溢出 */
+#how-to {
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+}
+#how-to .how-to-title {
+  color: #6a6f9a; font-size: 0.8rem; letter-spacing: 0.3em;
+}
+#how-to p {
+  color: #9aa0c8; font-size: clamp(0.72rem, 2.5vw, 0.86rem); line-height: 1.45;
+}
+#how-to p b { color: #00e5ff; font-weight: 700; }
+#how-to .hint-sub { margin-top: 4px; color: #6a6f9a; }
+
 /* 游戏内 HUD（不拦截点击） */
 #hud { position: fixed; inset: 0; z-index: 5; pointer-events: none; }
 #score {
@@ -134,6 +161,35 @@ canvas { position: fixed; inset: 0; display: block; }
   font-size: clamp(1.1rem, 3.5vw, 1.5rem); font-weight: 700;
   color: #ff2fd6; text-shadow: 0 0 12px rgba(255, 47, 214, 0.8);
 }
+/* 奖励时间横幅（2026-09-20 新增）：金色霓虹、居中偏上，
+   top:13% 避开分数/连击与飞行元素所在的中间带；#hud 已是 pointer-events:none */
+#bonus {
+  position: absolute; top: 13%; left: 0; right: 0;
+  display: flex; flex-direction: column; align-items: center; gap: 2px; text-align: center;
+  color: #ffd700;
+  animation: bonusPop 0.5s cubic-bezier(0.2, 1.4, 0.4, 1); /* display:none → 显示时自动重播 */
+}
+#bonus-title {
+  font-size: clamp(1.1rem, 4vw, 1.6rem); font-weight: 800; letter-spacing: 0.22em;
+  text-indent: 0.22em; /* 补掉末字后多出的字距，视觉上真正居中 */
+  animation: bonusGlow 1.4s ease-in-out infinite;
+}
+#bonus-count {
+  font-size: clamp(2rem, 8vw, 3.2rem); font-weight: 900; color: #fff3b0;
+  animation: bonusGlow 1.4s ease-in-out infinite;
+}
+/* 最后 3 秒：转红闪烁，提醒障碍要回来了（复用 #new-record 的 blink） */
+#bonus.warning #bonus-title, #bonus.warning #bonus-count {
+  color: #ff3355; animation: blink 0.42s infinite;
+}
+@keyframes bonusPop {
+  from { transform: scale(0.6); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
+}
+@keyframes bonusGlow {
+  0%, 100% { text-shadow: 0 0 10px #ffd700, 0 0 30px rgba(255, 215, 0, 0.55); }
+  50%      { text-shadow: 0 0 16px #ffd700, 0 0 54px rgba(255, 215, 0, 0.95); }
+}
 #progress-bar {
   position: absolute; left: 0; right: 0; bottom: 0; height: 5px;
   background: rgba(255, 255, 255, 0.06);
@@ -143,3 +199,39 @@ canvas { position: fixed; inset: 0; display: block; }
   background: linear-gradient(90deg, #00e5ff, #ff2fd6);
   box-shadow: 0 0 10px #00e5ff;
 }
+
+/* —— 护盾（2026-09-20 新增）：状态胶囊 + 手机按钮 —— */
+/* 状态胶囊：左下角，就绪青 / 生效金 / 冷却灰 / 蓝墙在场且就绪时红色脉动 */
+#shield-state {
+  display: none;
+  position: absolute; left: 18px; bottom: 16px;
+  padding: 5px 12px; border-radius: 999px;
+  font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;
+  border: 1px solid currentColor;
+}
+#shield-state.show { display: block; }
+#shield-state.ready { color: #00e5ff; box-shadow: 0 0 10px rgba(0, 229, 255, 0.35); }
+#shield-state.on { color: #ffd700; box-shadow: 0 0 12px rgba(255, 215, 0, 0.45); }
+#shield-state.cool { color: #6a6f9a; }
+#shield-state.alert {
+  color: #ff3355; border-color: #ff3355;
+  animation: blink 0.42s infinite; /* 复用既有的 blink 关键帧 */
+  box-shadow: 0 0 14px rgba(255, 51, 85, 0.55);
+}
+/* 手机按钮：右下角圆形。默认不显示——电脑端点击屏幕任意处都在跳跃，
+   摆一个会吃掉点击的按钮会毁掉手感；触屏设备才显示。
+   用 any-pointer 而不是 pointer：带鼠标的触屏本 / 接键盘的 iPad 主指针是 fine。 */
+#shield-btn {
+  display: none;
+  position: absolute; right: 20px; bottom: calc(20px + env(safe-area-inset-bottom));
+  width: 64px; height: 64px; border-radius: 50%;
+  align-items: center; justify-content: center;
+  font-size: 0.95rem; font-weight: 800; color: #d8f6ff;
+  background: rgba(10, 20, 40, 0.55);
+  border: 2px solid rgba(216, 246, 255, 0.75);
+  box-shadow: 0 0 16px rgba(216, 246, 255, 0.35);
+  pointer-events: auto; /* 只有这一个元素拦截触摸，其余 HUD 仍是穿透的 */
+}
+#shield-btn.cool { color: #6a6f9a; border-color: rgba(106, 111, 154, 0.6); box-shadow: none; opacity: 0.55; }
+@media (any-pointer: coarse) { #shield-btn { display: flex; } }
+body.touch #shield-btn { display: flex; } /* 兜底：真实触摸过一次就显示 */

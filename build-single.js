@@ -33,8 +33,7 @@ html = html.replace(LINK_RE, () => '<style>\n' + css + '\n</style>');
 
 // 2) 内联 JS：按出现顺序提取并替换（歌曲数据必须在 game.js 之前，保序即保正确）
 //    </script 转义为防御性措施（base64 字母表不含 <，当前各文件均无此子串）
-//    歌曲脚本是 jsDelivr 绝对地址（在线版加速用）：按 URL 的文件名找本地同名文件内联，
-//    保证单文件完全离线可玩；其余 http(s) 外部脚本保持引用
+//    其余 http(s) 外部脚本保持引用（当前没有这样的脚本）
 const tags = html.match(/<script[^>]*src="([^"]+)"[^>]*><\/script>/g) || [];
 let inlineCount = 0;
 for (const tag of tags) {
@@ -49,6 +48,22 @@ for (const tag of tags) {
   html = html.replace(tag, () => '<script>\n' + js + '\n</script>');
   inlineCount++;
 }
+
+// 2b) 歌曲数据加载器 → 三份内联数据
+//     单文件没有网络可言（也常在 file:// 下打开），必须把三首歌的数据整段内联，
+//     不能留下 index.html 里那段「本地文件 / CDN 二选一」的加载器
+const SONG_FILES = ['song-data.js', 'song-data-sugar-free.js', 'song-data-sexy-love.js'];
+const LOADER_RE = /<!--\s*SONG_DATA:START\s*-->[\s\S]*?<!--\s*SONG_DATA:END\s*-->/;
+if (!LOADER_RE.test(html)) {
+  console.error('自检失败：index.html 中未找到 SONG_DATA:START/END 标记');
+  process.exit(1);
+}
+const songs = SONG_FILES.map((f) => {
+  if (!fs.existsSync(f)) { console.error('自检失败：缺少歌曲数据文件 ' + f); process.exit(1); }
+  return '<script>\n' + fs.readFileSync(f, 'utf8').replace(/<\/script/gi, '<\\/script') + '\n</script>';
+}).join('\n');
+html = html.replace(LOADER_RE, () => songs);
+inlineCount += SONG_FILES.length;
 
 // 3) 自检 + 写出
 if (/<script[^>]*src=/.test(html) || /href="style\.css"/.test(html)) {
