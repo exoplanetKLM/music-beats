@@ -92,62 +92,128 @@ canvas { position: fixed; inset: 0; display: block; }
   background: rgba(90, 95, 138, 0.12);
   box-shadow: 0 0 14px rgba(90, 95, 138, 0.4);
 }
+/* 小号按钮（玩法说明 / 知道了）：比主按钮窄一圈（须在 .btn 之后，同权重靠源顺序生效） */
+.btn-compact { padding: 12px 30px; font-size: 1rem; letter-spacing: 0.12em; }
 
-/* 背景音乐切换（2026-09-03 新增） */
-#song-picker { display: flex; flex-direction: column; align-items: center; gap: 10px; }
-#song-picker-label {
-  color: #6a6f9a; font-size: 0.9rem; letter-spacing: 0.3em;
-}
-/* 歌曲加载提示（2026-09-20）：CDN 慢/不通时告知「可先玩，背景是合成音乐」 */
+/* 歌曲加载提示（2026-09-20）：CDN 慢/不通时告知「可先玩，背景是合成音乐」；
+   选歌后弹窗立刻关闭，所以这条提示必须留在开始界面 */
 #song-hint {
-  margin: 6px 0 0; font-size: 0.8rem; color: #ffd54a;
+  margin: 0; font-size: 0.8rem; color: #ffd54a;
   text-shadow: 0 0 8px rgba(255, 213, 74, 0.5);
 }
-#song-buttons { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
-.btn-song {
-  padding: 9px 20px; font-size: 0.95rem; letter-spacing: 0.08em;
-  color: #8a8fb8; background: transparent;
-  border: 1.5px solid #3a3f6a; border-radius: 999px;
-  cursor: pointer; transition: all 0.15s ease;
-}
-.btn-song:hover { color: #c8cbe8; border-color: #5a5f8a; }
-.btn-song.active {
-  color: #ff2fd6; border-color: #ff2fd6;
-  box-shadow: 0 0 12px rgba(255, 47, 214, 0.45), inset 0 0 10px rgba(255, 47, 214, 0.12);
-}
-.btn-song.loading { cursor: wait; opacity: 0.75; }
 #btn-start:disabled { opacity: 0.45; cursor: wait; transform: none; }
-
-/* 各曲最高分小榜单（2026-09-03 新增：每首歌记录独立展示） */
-#best-list { display: flex; flex-direction: column; align-items: center; gap: 6px; }
-#best-list-label { color: #6a6f9a; font-size: 0.9rem; letter-spacing: 0.3em; }
-#best-rows { display: flex; flex-direction: column; gap: 4px; min-width: 200px; }
-.best-row {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 4px 14px; border-radius: 8px;
-  color: #8a8fb8; font-size: 0.95rem;
-  border: 1px solid transparent; transition: all 0.15s ease;
+/* 开始界面按钮区（2026-09-21）：开始游戏独占一行，下面一行「音乐选择」「玩法说明」，
+   「音乐选择」按钮带曲名后本身就较宽，窄屏放不下时两个小按钮自动折行且居中 */
+#menu-actions {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
 }
-.best-row-value { color: #ffd54a; font-weight: 700; }
-.best-row.current {
-  color: #c8cbe8;
-  border-color: rgba(0, 229, 255, 0.35);
-  box-shadow: 0 0 8px rgba(0, 229, 255, 0.15);
+#menu-row { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 12px; }
+/* 音乐选择按钮上带当前曲名（最长「音乐选择 · 纠缠Shattered（叶自冉）」实测约 311px），
+   360px 手机上必须整条显示：字号/字距/内边距各收一档、上限放到 94vw；
+   更窄的机型（320px）仍由省略号兜底 */
+#btn-music {
+  border-color: rgba(0, 229, 255, 0.45);
+  box-shadow: 0 0 12px rgba(0, 229, 255, 0.18);
+  padding: 12px 16px; font-size: 0.95rem; letter-spacing: 0.06em;
+  max-width: min(94vw, 380px);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+#btn-music.loading { cursor: wait; opacity: 0.75; }
 
-/* 玩法说明（2026-09-20 新增：替换原来的一句「踩中节拍得分，躲开障碍！」）
-   每行 ≤ 25 字，360px 宽不折行；比 .hint 稍小一档，避免矮屏溢出 */
+/* —— 音乐选择弹窗的歌曲行（2026-09-21：原「三曲按钮 + 各曲最高分榜单」合并成一套）——
+   行由 game.js 按 SONGS 生成，一次建好后只改文案与 class（绝不重建，重建会丢焦点）。 */
+#song-rows {
+  display: flex; flex-direction: column; gap: 8px; width: 100%;
+  /* 以后加到第 4、5 首时列表内滚，卡片不会顶出屏幕；3 首时不触发滚动 */
+  max-height: min(52vh, 320px);
+  overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y;
+}
+/* 两行式：歌名独占一行（长歌名如「纠缠Shattered（叶自冉）」实测 187px，
+   与「使用中」胶囊挤在一行只剩 133px 必被截断），第二行放胶囊与最高分 */
+.song-row {
+  display: flex; flex-direction: column; align-items: stretch; gap: 2px;
+  width: 100%; min-height: 52px; padding: 8px 14px; /* ≥44px = 手指点击目标下限 */
+  font-family: inherit; text-align: left; cursor: pointer;
+  color: #8a8fb8; background: transparent;
+  border: 1.5px solid #3a3f6a; border-radius: 12px;
+  transition: all 0.15s ease;
+}
+.song-row-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.song-row:hover { color: #c8cbe8; border-color: #5a5f8a; }
+.song-row-name {
+  flex: 1 1 auto; min-width: 0; /* min-width:0 不可省，否则省略号不生效 */
+  font-size: 0.98rem; letter-spacing: 0.04em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.song-row-best { flex: 0 0 auto; color: #ffd54a; font-size: 0.85rem; font-weight: 700; }
+/* 「使用中」胶囊：只在当前正在播放的那首上显示 */
+.song-row-tag {
+  display: none; flex: 0 0 auto; padding: 2px 8px;
+  font-size: 0.72rem; color: #00e5ff;
+  border: 1px solid rgba(0, 229, 255, 0.5); border-radius: 999px;
+}
+.song-row.current .song-row-tag { display: inline-block; }
+/* 弹窗里待确认的选中项：沿用原歌曲按钮选中态的洋红 */
+.song-row.picked {
+  color: #c8cbe8; border-color: #ff2fd6;
+  box-shadow: 0 0 12px rgba(255, 47, 214, 0.35), inset 0 0 10px rgba(255, 47, 214, 0.1);
+}
+.song-row.loading { cursor: wait; opacity: 0.75; }
+
+/* 玩法说明（2026-09-20 新增，2026-09-21 移入弹窗）
+   弹窗是专心阅读的场景，字号比原来常驻面板放大一档 */
 #how-to {
   display: flex; flex-direction: column; align-items: center; gap: 5px;
 }
-#how-to .how-to-title {
+/* 弹窗标题：分组选择器里必须保留 #how-to .how-to-title——#how-to p（1,0,1）优先级高于
+   裸类 .modal-title（0,1,0），只写类会把玩法说明的标题打回正文样式 */
+.modal-title, #how-to .how-to-title {
   color: #6a6f9a; font-size: 0.8rem; letter-spacing: 0.3em;
 }
 #how-to p {
-  color: #9aa0c8; font-size: clamp(0.72rem, 2.5vw, 0.86rem); line-height: 1.45;
+  color: #9aa0c8; font-size: clamp(0.78rem, 3vw, 0.95rem); line-height: 1.5;
 }
 #how-to p b { color: #00e5ff; font-weight: 700; }
 #how-to .hint-sub { margin-top: 4px; color: #6a6f9a; }
+
+/* —— 玩法说明弹窗（2026-09-21 新增）——
+   z-index 40 > .screen 的 10 > #hud 的 5：打开时画布、开始按钮、手机护盾钮全部收不到点击。
+   overflow-y + touch-action:pan-y 照搬 .screen 那套「矮屏可滚」的写法（touch-action 不继承，
+   body 的 none 管不到这里，必须显式开）。刻意不用 backdrop-filter：背后画布每帧重绘，
+   模糊会逐帧重合成，手机掉帧。 */
+.modal {
+  position: fixed; inset: 0; z-index: 40;
+  display: flex;
+  overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+  background: rgba(4, 4, 12, 0.78);
+}
+/* margin:auto：够高时居中；极矮视口溢出时自动塌成从顶部开始滚（同 .screen 的首尾 auto 思路） */
+.modal-card {
+  position: relative; margin: auto;
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  width: min(92vw, 440px); /* 440 是「每行说明在桌面端都排得下一行」的宽度（手机窄屏仍会折行） */
+  padding: 22px 20px 20px;
+  border: 1.5px solid rgba(0, 229, 255, 0.35); border-radius: 16px;
+  background: linear-gradient(180deg, #12122a, #0b0b18);
+  box-shadow: 0 0 26px rgba(0, 229, 255, 0.25), inset 0 0 24px rgba(0, 229, 255, 0.06);
+  animation: bonusPop 0.28s cubic-bezier(0.2, 1.4, 0.4, 1); /* display:none → 显示时自动重播 */
+}
+.modal-close {
+  position: absolute; top: 8px; right: 8px;
+  width: 32px; height: 32px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.95rem; line-height: 1; color: #8a8fb8;
+  background: transparent; border: 1.5px solid #3a3f6a; border-radius: 50%;
+  cursor: pointer; transition: all 0.15s ease;
+}
+.modal-close:hover, .modal-close:active { color: #c8cbe8; border-color: #5a5f8a; }
+/* 视觉仍是 32px 圆，但把实际点区撑到 44px（触控目标下限），外观不变 */
+.modal-close::after { content: ''; position: absolute; inset: -6px; border-radius: 50%; }
+/* 键盘焦点：给一个和霓虹风一致的轮廓，别用系统默认那圈 */
+.modal :focus-visible {
+  outline: 2px solid rgba(0, 229, 255, 0.65); outline-offset: 3px;
+}
 
 /* 游戏内 HUD（不拦截点击） */
 #hud { position: fixed; inset: 0; z-index: 5; pointer-events: none; }

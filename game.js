@@ -124,18 +124,37 @@ const CONFIG = {
 
   bestKey: 'musicJumpBestScore', // 最高分记录前缀：每首歌一条，键 = 前缀 + 曲目 id
   songKey: 'musicJumpSong',  // 上次选择的背景音乐（localStorage）
+  howToKey: 'musicJumpHowTo', // 玩法说明「看过了」的标记：首次进入自动弹窗，只弹一次
   songLoadTimeout: 12,       // 歌曲加载超时（秒）：超时先放行（用合成音乐开打），
                              // 数据到位后自动换上——避免 CDN 慢/不通时菜单被卡死
 };
 
-/* ---------- 1.5 背景音乐曲库（2026-09-03 新增：开始界面可切换） ---------- */
-// 每首歌独立内嵌（见 song-data*.js）；data 懒取——只有被选中的歌才解码分析，
-// 已解码结果放 AudioEngine.songCache（LRU，最多缓存 2 首）。
+/* ---------- 1.5 背景音乐曲库（2026-09-03 新增：音乐选择弹窗里切换） ---------- */
+// 每首歌独立内嵌（见 song-data*.js）；数据**按需加载**——只有被选中的歌才注入数据脚本、
+// 解码分析（见 ensureSongData），已解码结果放 AudioEngine.songCache（LRU，最多缓存 2 首）。
+// file = 该曲数据脚本的文件名；tune 可选，见 SONG_TUNE 注释（正常不写）。
 const SONGS = [
-  { id: 'no9', name: 'No.9', data: () => window.SONG_DATA },
-  { id: 'sugar-free', name: 'Sugar Free', data: () => window.SONG_DATA_SUGAR_FREE },
-  { id: 'sexy-love', name: 'Sexy Love', data: () => window.SONG_DATA_SEXY_LOVE },
+  { id: 'no9', name: 'No.9（T-ara）', file: 'song-data.js', data: () => window.SONG_DATA },
+  { id: 'sugar-free', name: 'Sugar Free（T-ara）', file: 'song-data-sugar-free.js', data: () => window.SONG_DATA_SUGAR_FREE },
+  { id: 'sexy-love', name: 'Sexy Love（T-ara）', file: 'song-data-sexy-love.js', data: () => window.SONG_DATA_SEXY_LOVE },
+  { id: 'shattered', name: '纠缠Shattered（叶自冉）', file: 'song-data-shattered.js', data: () => window.SONG_DATA_SHATTERED },
+  { id: 'flower', name: 'flower.（LYVET李维特）', file: 'song-data-flower.js', data: () => window.SONG_DATA_FLOWER },
 ];
+
+// 数据脚本按需加载（2026-09-21）。三条放行路径，保证「没有加载器」时行为与从前一致：
+//   · 单文件产物：build-single.js 把 __loadSongScript 短路成 Promise.resolve(true)；
+//   · 无头测试桩 / 其他宿主：window 上没有这个方法 → 直接放行，走 data() 返回 undefined
+//     的既有失败路径（'歌曲数据缺失'）；
+//   · 没写 file 字段：当作数据已就位。
+// 加载器约定只 resolve(true/false) 不 reject；这里再兜一层，绝不让它把 loadSong 的链带崩。
+function ensureSongData(entry) {
+  if (!entry.file) return Promise.resolve(true);
+  if (typeof window.__loadSongScript !== 'function') return Promise.resolve(true);
+  try {
+    return Promise.resolve(window.__loadSongScript(entry.id, entry.file))
+      .then((ok) => ok !== false, () => false);
+  } catch (e) { return Promise.resolve(false); }
+}
 
 /* ---------- 2. 节拍时间表 ---------- */
 
@@ -143,8 +162,11 @@ const TOTAL_BEATS =
   CONFIG.stage1Beats + CONFIG.stage2Beats + CONFIG.stage3Beats + CONFIG.stage4Beats; // 256
 
 // 手动微调（节拍分析不准时使用，正常保持 0）：
-//   bpm > 0   用指定 BPM 重建拍表
+//   bpm > 0   用指定 BPM 重建均匀拍表（也是把难度密度拉回常规区间的手段——BPM 直接决定
+//             一轮的秒数，太快会让「每 8 拍 4 个障碍」变成跳跃时长压不住的连拍）
 //   offset > 0 把首拍挪到指定秒数
+// 这是全局默认值；单曲可用 SONGS[].tune 覆盖（没写的字段按「不覆盖」处理——
+// undefined > 0 为 false，所以 { offset: 1.2 } 这种半截对象是合法的）
 const SONG_TUNE = { bpm: 0, offset: 0 };
 
 // 一「轮」的长度（秒，进度条用）：歌曲模式 = 256 拍 × 实际拍距
@@ -304,6 +326,10 @@ const AudioEngine = {
       try {
         const entry = SONGS.find((s) => s.id === id);
         if (!entry) throw new Error('曲目不存在：' + id);
+        // 按需加载数据脚本。这个 await 必须留在微任务里（不能在 .then 之前 await）：
+        // 上面那行 loadPromises[id] = p 尚未执行，提前 await 会让同步失败路径在赋值之前
+        // 跑到 finally 的 delete，键永远残留、按钮卡在「加载中」且无法重试。
+        if (!(await ensureSongData(entry))) throw new Error('歌曲数据脚本未就绪：' + id);
         const data = entry.data();
         if (typeof data !== 'string') throw new Error('歌曲数据缺失');
         const bytes = await fetch(data).then((r) => r.arrayBuffer());
@@ -311,10 +337,11 @@ const AudioEngine = {
         const info = analyzeBeats(audio);
         if (!info || info.beats.length < 32) throw new Error('节拍分析失败');
         let beats = info.beats;
-        if (SONG_TUNE.bpm > 0 || SONG_TUNE.offset > 0) {
+        const tune = entry.tune || SONG_TUNE; // 逐曲微调优先，全局默认兜底
+        if (tune.bpm > 0 || tune.offset > 0) {
           // 手动微调：按给定 BPM / 首拍重建拍表（对当前歌曲生效）
-          const d = SONG_TUNE.bpm > 0 ? 60 / SONG_TUNE.bpm : beats[1] - beats[0];
-          const start = SONG_TUNE.offset > 0 ? SONG_TUNE.offset : beats[0];
+          const d = tune.bpm > 0 ? 60 / tune.bpm : beats[1] - beats[0];
+          const start = tune.offset > 0 ? tune.offset : beats[0];
           const arr = [];
           for (let t = start; t < audio.duration - d; t += d) arr.push(t);
           beats = arr;
@@ -697,7 +724,8 @@ const S = {
   phase: 'menu',            // menu | playing | dying | over
   score: 0, combo: 0,
   bests: {},                // 每首歌的最高分记录（id → 分数，2026-09-03 起独立计算）
-  bestRowEls: {},           // 小榜单行 DOM 引用（id → { row, val }）
+  songRowEls: {},           // 音乐选择弹窗的行 DOM 引用（id → { row, name, best }）
+  songLoad: { id: null, state: '' }, // 本次歌曲加载：'' 空闲 | 'loading' 在途 | 'slow' 超时放行
   jumpStart: -10,           // 上一次起跳时刻（歌内时间）
   jumpBufferUntil: -1,      // 空中按键的缓冲截止时刻
   entities: [],             // { type, start, dur, judged, beatT }
@@ -734,6 +762,8 @@ const bonusEl = $('bonus'), bonusCountEl = $('bonus-count');
 const shieldStateEl = $('shield-state'), shieldBtnEl = $('shield-btn');
 const finalScore = $('final-score'), finalBestSong = $('final-best-song');
 const finalBestValue = $('final-best-value'), newRecord = $('new-record');
+const howToModalEl = $('how-to-modal');
+const songModalEl = $('song-modal'), songRowsEl = $('song-rows'), btnMusicEl = $('btn-music');
 
 let W = 0, H = 0, squareSize = 40, playerX = 0, groundY = 0;
 
@@ -1388,6 +1418,15 @@ function loadSongId() {
 function saveSongId(v) {
   try { localStorage.setItem(CONFIG.songKey, String(v)); } catch (e) {}
 }
+// 玩法说明是否看过（首次进入自动弹窗用）。
+// localStorage 不可用（隐私模式 / 某些 file:// 配置）时当作没看过——每次都弹一次，
+// 功能不受影响，且 try/catch 保证异常绝不打断裂启动段。
+function howToSeen() {
+  try { return localStorage.getItem(CONFIG.howToKey) === '1'; } catch (e) { return false; }
+}
+function markHowToSeen() {
+  try { localStorage.setItem(CONFIG.howToKey, '1'); } catch (e) {}
+}
 
 function updateHud() {
   const t = songTime();
@@ -1434,26 +1473,26 @@ function updateHud() {
   if (shieldBtnEl.classList.contains('cool') !== btnCool) shieldBtnEl.classList.toggle('cool', btnCool);
 }
 
-// —— 背景音乐切换（2026-09-03 新增）——
-// 选择曲目：记录选择 → 按钮高亮 → 未缓存则异步解码分析（期间禁用开始按钮，
-// 避免「选了歌却响合成音乐」）。加载失败自动回退 No.9，再失败则程序合成降级。
+// —— 背景音乐切换（2026-09-03 新增，2026-09-21 改弹窗）——
+// 选择曲目：记录选择 → 收起弹窗 → 开始界面按钮显示曲名 → 未缓存则异步解码分析
+// （期间禁用开始按钮，避免「选了歌却响合成音乐」）。加载失败自动回退 No.9，再失败则程序合成降级。
 function selectSong(id) {
   if (!SONGS.some((s) => s.id === id)) return;
+  closeSongModal(); // 不变量：选中即收起（幂等，弹窗没开时也无害）
   AudioEngine.songId = id;
   saveSongId(id);
   const cached = AudioEngine.songCache.get(id);
   if (cached) {
     if (S.phase === 'playing') AudioEngine.pendingSong = { id, song: cached };
     else AudioEngine.song = cached;
+    S.songLoad = { id, state: '' }; // 命中缓存：立刻可用，提示也该跟着消失
     setStartEnabled(true);
-    refreshSongButtons();
-    refreshBestList();
+    refreshSongUI();
     return;
   }
   setStartEnabled(false);
   loadSongGuarded(id); // 先发起加载（同步建立 loadPromises），再刷新按钮的 loading 态
-  refreshSongButtons();
-  refreshBestList();
+  refreshSongUI();
 }
 
 // —— 歌曲加载的兜底放行（2026-09-20）——
@@ -1463,64 +1502,110 @@ function selectSong(id) {
 // 数据到位后由 __songDataReady 自动重新加载，装上真正的歌曲。
 function setSongHint(text) {
   const el = $('song-hint');
+  if (!el) return;
   el.textContent = text || '';
   el.classList.toggle('hidden', !text);
 }
 
 function loadSongGuarded(id) {
+  S.songLoad = { id, state: 'loading' };
   const loaded = AudioEngine.loadSong(id);
   const guard = new Promise((r) => setTimeout(() => r('timeout'), CONFIG.songLoadTimeout * 1000));
-  Promise.race([loaded, guard]).then((res) => {
-    refreshSongButtons();
-    if (AudioEngine.songId !== id) return; // 期间玩家又换了曲目，交给后来者处理
-    setStartEnabled(true);
-    setSongHint(res === true ? '' : '歌曲加载中…（可先玩，背景先用合成音乐）');
-  });
+  const settle = (state) => {
+    // 只在「这次加载仍是当前这次」时改状态：期间玩家又换了曲目就交给后来者，
+    // 否则晚到的超时会把新选的歌的状态覆盖掉
+    if (S.songLoad.id === id) S.songLoad = { id, state };
+    if (AudioEngine.songId === id) setStartEnabled(true);
+    refreshSongUI();
+  };
+  // 第二个参数不能省：loaded 万一 reject，没有它这里就是未捕获拒绝，
+  // 「开始游戏」会永远停在灰态
+  Promise.race([loaded, guard]).then((res) => settle(res === true ? '' : 'slow'), () => settle('slow'));
+  // 超时之后才加载完成——按需加载后这是常态（数据脚本 3MB 走慢链路要几十秒）：
+  // race 那时已经落了 'slow'，这里必须补一次状态，否则「加载中」的黄字会一直挂在
+  // 开始界面（歌其实已经装好了，下一局就会响）
+  loaded.then((res) => { if (res === true && S.songLoad.id === id && S.songLoad.state !== '') settle(''); }, () => {});
   return loaded;
 }
 
-function refreshSongButtons() {
-  for (const btn of document.querySelectorAll('.btn-song')) {
-    const id = btn.getAttribute('data-song');
-    const entry = SONGS.find((s) => s.id === id);
-    if (!entry) continue;
-    const active = id === AudioEngine.songId;
-    const loading = active && !!AudioEngine.loadPromises[id];
-    btn.classList.toggle('active', active);
-    btn.classList.toggle('loading', loading);
-    btn.textContent = loading ? entry.name + '…' : entry.name;
+// 提示文案由加载状态派生（而不是各调用点各写一遍）：切回已缓存的歌时提示会自动消失，
+// 不会像以前那样把上一条「加载中」黄字一直挂在开始界面
+function hintText() {
+  const L = S.songLoad;
+  if (!L.id || L.id !== AudioEngine.songId) return '';
+  if (L.state === 'loading') return '正在加载《' + songName(L.id) + '》…';
+  if (L.state === 'slow') return '歌曲加载中…（可先玩，背景先用合成音乐）'; // 超时/失败时的原文案
+  return '';
+}
+
+// —— 音乐选择弹窗的歌曲行（2026-09-21：原「三曲按钮 + 各曲最高分榜单」合并成一套）——
+// 行由 SONGS 生成（以后加歌自动扩展），启动时 build 一次，之后只刷新文案与状态——
+// 刷新绝不可重建行（会丢掉焦点与已绑的监听）。行是 <button>：可聚焦、Enter/空格激活、
+// 自带 ≥44px 触控高度；点击在生成处逐行绑定（行只建一次，不必用事件委托）。
+function buildSongRows() {
+  if (!songRowsEl) return; // DOM 缺失时的兜底：宁可没有行也别打断启动段
+  songRowsEl.innerHTML = '';
+  S.songRowEls = {};
+  for (const s of SONGS) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'song-row';
+    row.setAttribute('data-song', s.id);
+    const name = document.createElement('span');
+    name.className = 'song-row-name';
+    name.textContent = s.name;
+    const tag = document.createElement('span');
+    tag.className = 'song-row-tag';
+    tag.textContent = '使用中';
+    const best = document.createElement('span');
+    best.className = 'song-row-best';
+    const meta = document.createElement('span'); // 第二行：胶囊 + 最高分
+    meta.className = 'song-row-meta';
+    meta.appendChild(tag); meta.appendChild(best);
+    row.appendChild(name); row.appendChild(meta);
+    row.addEventListener('click', () => pickSong(s.id));
+    songRowsEl.appendChild(row);
+    S.songRowEls[s.id] = { row, name, best };
+  }
+  refreshSongUI();
+}
+
+// 行上的四件事一次刷完（正在使用 / 待确认选中 / 加载态 / 最高分都在同一行上，分开刷必然漏一处）
+function refreshSongRows() {
+  const cur = AudioEngine.songId;
+  const loading = !!AudioEngine.loadPromises[cur]; // 只有当前曲目才可能「在加载」
+  for (const s of SONGS) {
+    const ref = S.songRowEls[s.id];
+    if (!ref) continue;
+    const current = s.id === cur;
+    ref.row.classList.toggle('current', current);
+    // 待确认标记只在弹窗开着时渲染：关掉之后它没有任何含义，
+    // 留着会在「确定后 → 再打开」之间显示成与当前曲目矛盾的高亮
+    ref.row.classList.toggle('picked', isSongModalOpen() && s.id === musicPickId);
+    ref.row.classList.toggle('loading', current && loading);
+    ref.row.setAttribute('aria-current', current ? 'true' : 'false');
+    ref.name.textContent = current && loading ? s.name + '…' : s.name;
+    const b = bestFor(s.id);
+    ref.best.textContent = b > 0 ? '最高 ' + b : '暂无记录';
   }
 }
 
-// —— 各曲最高分小榜单（2026-09-03 新增：每首歌的记录独立展示）——
-// 榜单行由 SONGS 生成（以后加歌自动扩展），启动时 build 一次，之后只刷新数值与高亮。
-function buildBestList() {
-  const box = $('best-rows');
-  box.innerHTML = '';
-  S.bestRowEls = {};
-  for (const s of SONGS) {
-    const row = document.createElement('p');
-    row.className = 'best-row';
-    row.setAttribute('data-song', s.id);
-    const name = document.createElement('span');
-    name.className = 'best-row-name';
-    name.textContent = s.name;
-    const val = document.createElement('span');
-    val.className = 'best-row-value';
-    row.appendChild(name);
-    row.appendChild(val);
-    box.appendChild(row);
-    S.bestRowEls[s.id] = { row, val };
-  }
-  refreshBestList();
+// 开始界面那个按钮：曲名 + 加载中省略号（与行同一份数据，必须同一处刷新）
+function refreshSongButton() {
+  if (!btnMusicEl) return;
+  const loading = !!AudioEngine.loadPromises[AudioEngine.songId];
+  btnMusicEl.textContent = '音乐选择 · ' + songName(AudioEngine.songId) + (loading ? '…' : '');
+  btnMusicEl.classList.toggle('loading', loading);
 }
-function refreshBestList() {
-  for (const s of SONGS) {
-    const ref = S.bestRowEls[s.id];
-    if (!ref) continue;
-    ref.val.textContent = bestFor(s.id);
-    ref.row.classList.toggle('current', s.id === AudioEngine.songId);
-  }
+
+// 唯一的刷新入口（选曲 / 加载完成 / 打开弹窗 / 回到菜单 / 启动都走它）。
+// 注意「开始游戏」按钮的 disabled 不在这里派生——它编码的是「玩家已经等够了」，
+// 与「是否仍在加载」不是一回事（超时放行时两者恰好相反，混进来会把按钮永远锁死），
+// 只能由 selectSong / loadSongGuarded 显式设置。
+function refreshSongUI() {
+  refreshSongRows();
+  refreshSongButton();
+  setSongHint(hintText());
 }
 
 function setStartEnabled(on) {
@@ -1547,6 +1632,7 @@ function startGame() {
   shieldStateEl.className = ''; shieldBtnEl.classList.remove('cool');
   menuEl.classList.add('hidden');
   gameoverEl.classList.add('hidden');
+  closeModals(); // 不变量：一开局弹窗必定收起（杜绝「弹窗盖在游戏画面上」这一整类问题）
   hudEl.classList.remove('hidden');
   // 上一局进行中才加载完成的歌曲在这里启用（拍表与障碍排布从本局开始一致）
   if (AudioEngine.pendingSong && AudioEngine.pendingSong.id === AudioEngine.songId) {
@@ -1577,7 +1663,139 @@ function toMenu() {
   gameoverEl.classList.add('hidden');
   menuEl.classList.remove('hidden');
   hudEl.classList.add('hidden');
-  refreshBestList();
+  refreshSongUI(); // 结算页可能刚刷新过纪录，回菜单同步一次榜单数值
+}
+
+/* —— 弹窗（2026-09-21：玩法说明 / 音乐选择两个弹窗共用一套开关）——
+   同一个时刻最多一个弹窗，因此焦点变量可以共用一组。
+   弹窗打开期间 window 的 keydown 一律不喂给游戏（见下方 keydown 守卫）：
+   Enter 既是「开始游戏」的快捷键、又是聚焦按钮的默认激活键，
+   不拦住就会在玩家读弹窗的时候把游戏直接开起来。 */
+let modalReturnFocus = null;  // 打开弹窗的元素，关闭后把焦点还回去
+let downOnOverlay = null;     // 按下时落在哪个遮罩上（防「卡片里按下、遮罩上松手」误关）
+
+function anyModalOpen() { return isHowToOpen() || isSongModalOpen(); }
+function closeModals() { closeHowTo(); closeSongModal(); } // 两个都幂等
+
+function showModal(el, focusTarget) {
+  modalReturnFocus = document.activeElement || null; // 桩里可能没有 activeElement → 兜底 null
+  el.classList.remove('hidden');
+  // 焦点必须进弹窗：留在背后的「开始游戏」上时，Enter 会顺着按钮的默认行为把游戏开起来
+  // （focus 的存在性判断是给无头测试的 DOM 桩留的）
+  if (focusTarget && focusTarget.focus) focusTarget.focus();
+}
+function hideModal(el) {
+  el.classList.add('hidden');
+  downOnOverlay = null;
+  const el0 = modalReturnFocus;
+  modalReturnFocus = null;
+  // 只在开始界面归还（开局时 #menu 已隐藏，还给隐藏元素没有意义）；
+  // 自动弹出那次 activeElement 是 body → 不还，免得焦点落到「开始游戏」上
+  // （Enter 会同时触发按钮 click 与全局快捷键，白开一局）
+  if (S.phase === 'menu' && el0 && el0.focus && el0 !== document.body) el0.focus();
+}
+// 点遮罩关闭须「按下时也在遮罩上」——否则手指从卡片划到遮罩上松手，
+// click 的 target 是公共祖先（= 遮罩），会把弹窗误关
+function bindOverlayClose(el, closeFn) {
+  el.addEventListener('pointerdown', (e) => { downOnOverlay = e.target === el ? el : null; });
+  el.addEventListener('click', (e) => {
+    if (downOnOverlay === el && e.target === el) closeFn();
+    downOnOverlay = null;
+  });
+}
+
+/* —— 玩法说明弹窗 ——
+   首次进入自动弹出（打开即记进 localStorage，之后不再自动弹）；
+   开始界面「玩法说明」按钮随时可再打开。 */
+function isHowToOpen() { return !howToModalEl.classList.contains('hidden'); }
+function openHowTo() {
+  if (S.phase !== 'menu') return; // 只在开始界面可开：弹窗绝不盖在游戏画面上
+  if (isHowToOpen()) return;
+  closeSongModal();               // 互斥：同一时刻最多一个弹窗
+  showModal(howToModalEl, $('howto-ok'));
+  markHowToSeen();                // 「看到即算看过」：连点刷新也不会再弹
+}
+function closeHowTo() {
+  if (!isHowToOpen()) return;
+  hideModal(howToModalEl);
+}
+
+/* —— 音乐选择弹窗（2026-09-21）——
+   开始界面不再平铺三首歌，改成一个「音乐选择 · 当前曲名」按钮 + 本弹窗；
+   每行显示歌名 + 该曲最高分 + 「使用中」，点一行只是选中高亮，
+   按「确定」才生效并关闭（✕ / 点遮罩 / Esc = 取消，不改动当前曲目）。 */
+let musicPickId = ''; // 弹窗里待确认的曲目，只有「确定」才写进 AudioEngine.songId
+
+function isSongModalOpen() { return !songModalEl.classList.contains('hidden'); }
+function openSongModal() {
+  if (S.phase !== 'menu') return;
+  if (isSongModalOpen()) return;
+  closeHowTo();                 // 互斥
+  musicPickId = AudioEngine.songId; // 每次打开都从当前曲目起算
+  showModal(songModalEl, $('music-ok'));
+  refreshSongUI();              // 打开瞬间同步：最高分可能在结算后变了（须在 showModal 之后，
+                                // 否则 .picked 的渲染判定还看不到「弹窗已打开」）
+}
+// 取消路径（✕ / 遮罩 / Esc / 开局）：关闭即丢弃待确认项（靠下次打开时重新起算，见下）。
+// 这里刻意不重置 musicPickId——关闭那一刻 AudioEngine.songId 还可能没更新
+// （「确定」是后面才调 selectSong 的），重置反而会留下一个和新曲目矛盾的待确认项；
+// 待确认项只在弹窗开着时有意义（渲染时按 isSongModalOpen() 判定），
+// 每次 openSongModal 都会重新从当前曲目起算，所以不需要在关闭时清。
+function closeSongModal() {
+  if (!isSongModalOpen()) return;
+  hideModal(songModalEl);
+  refreshSongRows(); // .picked 只在弹窗开着时渲染，关掉后要立刻抹掉（Esc / 点遮罩都会走到这里）
+}
+function pickSong(id) {
+  if (!SONGS.some((s) => s.id === id)) return;
+  musicPickId = id;
+  refreshSongRows();
+}
+function confirmMusicPick() {
+  const id = musicPickId;       // 先取出：closeSongModal 会把它重置掉
+  closeSongModal();
+  if (id && id !== AudioEngine.songId) selectSong(id); // 没换曲目就别重复触发加载
+}
+
+// 焦点循环：Tab / Shift+Tab 在弹窗内的可聚焦元素之间转圈。
+// 绝不能放焦点跑出去——落到背后的「开始游戏」上，Enter 就在弹窗开着时开局了。
+function modalFocusRing() {
+  if (isSongModalOpen()) {
+    const rows = SONGS.map((s) => S.songRowEls[s.id]).filter(Boolean).map((r) => r.row);
+    return rows.concat([$('music-ok'), $('song-close')]);
+  }
+  if (isHowToOpen()) return [$('howto-ok'), $('howto-close')];
+  return [];
+}
+function cycleModalFocus(delta) {
+  const ring = modalFocusRing().filter((el) => el && el.focus);
+  if (!ring.length) return;
+  let i = ring.indexOf(document.activeElement);
+  if (i < 0) i = delta > 0 ? -1 : 0;
+  ring[(i + delta + ring.length) % ring.length].focus();
+}
+// ↑↓ 只在歌曲行之间移动焦点（不改变选中）；Enter/空格才是「选它」
+function moveSongFocus(delta) {
+  const rows = SONGS.map((s) => S.songRowEls[s.id]).filter(Boolean).map((r) => r.row);
+  if (!rows.length) return;
+  let i = rows.indexOf(document.activeElement);
+  if (i < 0) i = SONGS.findIndex((s) => s.id === musicPickId);
+  if (i < 0) i = 0;
+  const next = rows[(i + delta + rows.length) % rows.length];
+  if (next && next.focus) next.focus();
+}
+// 焦点在歌曲行上按 Enter：选中它并把焦点交给「确定」，键盘用户两次 Enter 走完「选中 → 确定」
+function stageFocusedSong() {
+  for (const s of SONGS) {
+    const ref = S.songRowEls[s.id];
+    if (ref && ref.row === document.activeElement) {
+      pickSong(s.id);
+      const ok = $('music-ok');
+      if (ok && ok.focus) ok.focus();
+      return true;
+    }
+  }
+  return false;
 }
 
 function startFromButton() {
@@ -1603,6 +1821,24 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
+  // 弹窗打开时所有按键都不喂给游戏：Esc 关闭、Tab 在弹窗内循环焦点（绝不放它跑出去，
+  // 跑到背后的「开始游戏」上 Enter 就开局了）、↑↓ 在歌曲行间移动焦点，
+  // 其余（Enter / 空格）交给聚焦的弹窗按钮——默认行为正是「选它 / 关掉 / 确定」
+  if (anyModalOpen()) {
+    if (e.code === 'Escape') { e.preventDefault(); closeModals(); }
+    else if (e.code === 'Tab') { e.preventDefault(); cycleModalFocus(e.shiftKey ? -1 : 1); }
+    else if (isSongModalOpen() && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
+      e.preventDefault();
+      moveSongFocus(e.code === 'ArrowDown' ? 1 : -1);
+    } else if (e.code === 'Enter' && stageFocusedSong()) {
+      // 焦点在歌曲行上按 Enter：选中它并把焦点交给「确定」，键盘两次 Enter 走完「选中 → 确定」。
+      // 必须 preventDefault 掉原生激活——焦点已经在上面那行里移走了，
+      // 不拦的话原生 click 会落到「确定」上，一按 Enter 就直接确认（没有反悔余地）。
+      // 空格不在此列：空格是 keyup 激活，原生 click 落在行上（= 只选中、不动焦点），正合适
+      e.preventDefault();
+    }
+    return;
+  }
   if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
     e.preventDefault();
     pressJump();
@@ -1631,9 +1867,16 @@ document.addEventListener('pointerdown', (e) => {
 $('btn-start').addEventListener('click', startFromButton);
 $('btn-restart').addEventListener('click', restartGame);
 $('btn-home').addEventListener('click', toMenu);
-for (const btn of document.querySelectorAll('.btn-song')) {
-  btn.addEventListener('click', () => selectSong(btn.getAttribute('data-song')));
-}
+// 玩法说明弹窗：按钮打开，关闭走「知道了」/ ✕ / 点遮罩（Esc 在 keydown 里）
+$('btn-how-to').addEventListener('click', openHowTo);
+$('howto-ok').addEventListener('click', closeHowTo);
+$('howto-close').addEventListener('click', closeHowTo);
+bindOverlayClose(howToModalEl, closeHowTo);
+// 音乐选择弹窗：按钮打开，关闭走「确定」（见 confirmMusicPick）/ ✕ / 点遮罩 / Esc
+$('btn-music').addEventListener('click', openSongModal);
+$('music-ok').addEventListener('click', confirmMusicPick);
+$('song-close').addEventListener('click', closeSongModal);
+bindOverlayClose(songModalEl, closeSongModal);
 
 // 切换标签页 → 自动暂停（音频时钟冻结，回来继续时不会错拍）
 document.addEventListener('visibilitychange', () => {
@@ -1657,15 +1900,15 @@ AudioEngine.ensure();               // 提前创建音频上下文（用户点�
 // 恢复上次选择的背景音乐并异步解码分析（加载完成前开始按钮禁用；失败则程序合成降级）
 const savedSongId = loadSongId();
 AudioEngine.songId = SONGS.some((s) => s.id === savedSongId) ? savedSongId : 'no9';
-// 歌曲脚本异步到达时自动接管（index.html 的加载器在这三个脚本 onload 时调用）
+// 过渡兼容钩子：GitHub Pages 对 HTML 与 JS 都给 max-age=600，部署后约十分钟内可能出现
+// 「新 game.js + 旧 index.html」的错配——旧加载器在每个歌曲脚本 onload 时会调这个函数。
+// 新页面（按需加载）不再调用它，留着只是让那十分钟里数据到位后仍能接管。
 window.__songDataReady = function () {
   if (AudioEngine.songCache.has(AudioEngine.songId)) return; // 已经装好了
   loadSongGuarded(AudioEngine.songId);
 };
 setStartEnabled(false);
-loadSongGuarded(AudioEngine.songId);
-if (window.__songScriptsLoaded > 0) window.__songDataReady(); // 数据比 game.js 先到
-refreshSongButtons();
+loadSongGuarded(AudioEngine.songId); // 只加载当前选中这一首的数据脚本
 // 每首歌的最高分记录 + 旧全局最高分一次性迁移到《No.9》
 for (const s of SONGS) S.bests[s.id] = loadBest(s.id);
 try {
@@ -1675,8 +1918,10 @@ try {
     localStorage.removeItem(CONFIG.bestKey);
   }
 } catch (e) {}
-buildBestList();
+buildSongRows(); // 建行 + 首次刷新（最高分已在上面的循环里读进 S.bests）
 resize();
+// 首次进入自动弹玩法说明（打开即记住，之后只从开始界面的「玩法说明」按钮打开）
+if (!howToSeen()) openHowTo();
 
 let lastT = performance.now();
 let lastFrameError = '';

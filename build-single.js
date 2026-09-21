@@ -7,7 +7,7 @@
 
    产出：style.css 内联为 <style>，本地 script 按原顺序内联为 <script>
          （歌曲数据在前、game.js 在后），双击即玩（file:// 兼容），
-         约 37MB（三首歌的 base64 音频是大头，压缩需另配 ffmpeg）。
+         约 20MB（五首歌的 base64 音频是大头；网页版是按需加载，只有单文件版才全量内联）。
    ================================================================ */
 'use strict';
 const fs = require('fs');
@@ -49,16 +49,21 @@ for (const tag of tags) {
   inlineCount++;
 }
 
-// 2b) 歌曲数据加载器 → 三份内联数据
-//     单文件没有网络可言（也常在 file:// 下打开），必须把三首歌的数据整段内联，
-//     不能留下 index.html 里那段「本地文件 / CDN 二选一」的加载器
-const SONG_FILES = ['song-data.js', 'song-data-sugar-free.js', 'song-data-sexy-love.js'];
+// 2b) 歌曲数据加载器 → 「按需加载短路桩 + 五份内联数据」
+//     单文件没有网络可言（也常在 file:// 下打开），五首必须整段内联；同时把
+//     __loadSongScript 短路成「永远已就绪」，game.js 一行都不用为单文件版特判。
+const SHIM = '<script>\n' +
+  '  // 单文件版：下面的歌曲数据已全部内联，按需加载直接短路成「已就绪」\n' +
+  '  window.__loadSongScript = function () { return Promise.resolve(true); };\n' +
+  '</script>';
+const SONG_FILES = ['song-data.js', 'song-data-sugar-free.js', 'song-data-sexy-love.js',
+  'song-data-shattered.js', 'song-data-flower.js'];
 const LOADER_RE = /<!--\s*SONG_DATA:START\s*-->[\s\S]*?<!--\s*SONG_DATA:END\s*-->/;
 if (!LOADER_RE.test(html)) {
   console.error('自检失败：index.html 中未找到 SONG_DATA:START/END 标记');
   process.exit(1);
 }
-const songs = SONG_FILES.map((f) => {
+const songs = SHIM + '\n' + SONG_FILES.map((f) => {
   if (!fs.existsSync(f)) { console.error('自检失败：缺少歌曲数据文件 ' + f); process.exit(1); }
   return '<script>\n' + fs.readFileSync(f, 'utf8').replace(/<\/script/gi, '<\\/script') + '\n</script>';
 }).join('\n');
