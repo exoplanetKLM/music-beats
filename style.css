@@ -267,10 +267,11 @@ canvas { position: fixed; inset: 0; display: block; }
 }
 
 /* —— 护盾（2026-09-20 新增）：状态胶囊 + 手机按钮 —— */
-/* 状态胶囊：左下角，就绪青 / 生效金 / 冷却灰 / 蓝墙在场且就绪时红色脉动 */
+/* 状态胶囊：右下角（与左下角的手机按钮左右对调，避免叠在一起），
+   就绪青 / 生效金 / 冷却灰 / 蓝墙在场且就绪时红色脉动 */
 #shield-state {
   display: none;
-  position: absolute; left: 18px; bottom: 16px;
+  position: absolute; right: 18px; bottom: 16px;
   padding: 5px 12px; border-radius: 999px;
   font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;
   border: 1px solid currentColor;
@@ -284,12 +285,13 @@ canvas { position: fixed; inset: 0; display: block; }
   animation: blink 0.42s infinite; /* 复用既有的 blink 关键帧 */
   box-shadow: 0 0 14px rgba(255, 51, 85, 0.55);
 }
-/* 手机按钮：右下角圆形。默认不显示——电脑端点击屏幕任意处都在跳跃，
+/* 手机按钮：左下角圆形（2026-09-21 从右下角挪过来，右手玩家用左拇指按）。
+   默认不显示——电脑端点击屏幕任意处都在跳跃，
    摆一个会吃掉点击的按钮会毁掉手感；触屏设备才显示。
    用 any-pointer 而不是 pointer：带鼠标的触屏本 / 接键盘的 iPad 主指针是 fine。 */
 #shield-btn {
   display: none;
-  position: absolute; right: 20px; bottom: calc(20px + env(safe-area-inset-bottom));
+  position: absolute; left: 20px; bottom: calc(20px + env(safe-area-inset-bottom));
   width: 64px; height: 64px; border-radius: 50%;
   align-items: center; justify-content: center;
   font-size: 0.95rem; font-weight: 800; color: #d8f6ff;

@@ -90,32 +90,36 @@ const CONFIG = {
   noteOffset: 0.1,          // 障碍到达比鼓点晚 0.1 秒（视觉对齐）；
                             // 随机节拍点的判定时刻 = 到达时刻 − 此值（视觉接触前 0.1 秒按键 = Perfect）
 
-  // —— 浮空障碍（CLAUDE.md 第二章：中后期随机出现，2026-09-02 新增）——
-  floatingStartBeat: 64,    // 第 64 拍（中等阶段）起可能出现
-  floatingRampBeats: 128,   // 概率爬坡拍数：第 192 拍达到上限
+  // —— 浮空障碍（CLAUDE.md 第二章：2026-09-02 新增，2026-09-21 改：开局即可出现）——
+  floatingStartBeat: 0,     // 开局即可出现（原为第 64 拍）
+  floatingBaseChance: 0.2,  // 开局概率（原来隐含为 0，现在 20% 起步）
+  floatingRampBeats: 64,    // 概率爬坡拍数：64 拍（约 30 秒）后达到上限
   floatingMaxChance: 0.4,   // 浮空概率上限 40%
 
   // —— 障碍几何与死亡（CLAUDE.md 第二章）——
   obstacleHeightFactor: 1.2, // 障碍高度 = 方块尺寸 × 1.2
   obstacleWidthFactor: 0.8,  // 障碍宽度 = 方块尺寸 × 0.8
 
-  // —— 蓝色巨障与护盾（2026-09-20 新增：1:30 后随机出现，跳不过去，必须开盾撞破）——
+  // —— 蓝色巨障与护盾（2026-09-20 新增，2026-09-21 改：30 秒起；跳不过去，必须开盾撞破）——
   blueObstacleColor: '#2f7dff', // 蓝色巨障（特意区别于方块青 #00e5ff）
   shieldColor: '#d8f6ff',    // 护盾光环
-  blueStartSec: 90,          // 1:30 之后开始出现（歌内秒数）
+  blueStartSec: 30,          // 30 秒之后开始出现（歌内秒数；原为 90）
   blueMinGap: 5,             // 出现间隔下限（秒）：不宜再低于护盾冷却（4 秒），
-                             // 否则「看到蓝墙就按 Q」会来不及（5 秒时余量 1 秒）
+                             // 否则「看到蓝墙就按 K」会来不及（5 秒时余量 1 秒）
   blueMaxGap: 9,             // 出现间隔上限（秒）
   blueLead: 0.7,             // 到达时刻的提前量（秒）：≥ noteGapAfter，节拍点才躲得开；
-                             // 并进飞行时长（见 spawnBlueObstacle），不是提前站在右缘
+                             // 并进飞行时长（见 spawnBlueObstacle），不是提前站在右缘。
+                             // 飞行时长 travelTime+blueLead = 1.7 秒 > shieldDuration，
+                             // 这是「看到蓝墙要稍等再按」的由来
   blueHeightFactor: 3.6,     // 仅渲染用：碰撞对蓝墙一律致命（跳跃顶点 3×方块 → 跳不过去）
   blueWidthFactor: 1.1,      // 宽度 = 方块尺寸 × 1.1
   blueClearGap: 0.6,         // 与其它障碍到达时刻的最小间隔（防「刚跳完就要盾」）
   blueRetryStep: 0.15,       // 冲突重试步长：须小于极难段的空档宽度，否则会跨过唯一空位
   blueRetryLimit: 2.5,       // 连续重试上限（秒）：超时放弃本次、重新排期（防无限重试）
   bluePostBonusGrace: 1.5,   // 奖励时间结束后此秒数内不出蓝色巨障
-  shieldDuration: 3,         // 护盾持续（秒）
-  shieldCooldown: 4,         // 冷却：从「按下」算起 4 秒后可再按（护盾结束后仅 1 秒空窗）
+  shieldDuration: 1.5,       // 护盾持续（秒）：比蓝墙 1.7 秒的飞行时长还短，
+                             // 所以「看到墙立刻按」会差 0.2 秒撞死——要等墙飞近一点再按
+  shieldCooldown: 4,         // 冷却：从「按下」算起 4 秒后可再按（护盾结束后有 2.5 秒空窗）
   scoreBlueSmash: 400,       // 撞破得分（固定分，不吃连击倍率）
 
   // —— 流程 ——
@@ -198,8 +202,9 @@ function beatTime(i) {
      noteGapBefore 秒 / 到达后 noteGapAfter 秒内不生成节拍点，踩点后
      跳障碍、跳障碍后踩点的窗口都足够宽；浮空障碍的「前拍无节拍点」
      约束同样被该间隙覆盖。
-   浮空障碍（2026-09-02 新增）：第 64 拍起，障碍按概率（线性爬坡至 40%）转为
-     浮空形态——悬在节拍点高度，贴地通过安全、起跳撞上即死（「别跳」的反向考验）。
+   浮空障碍（2026-09-02 新增，2026-09-21 起开局就有）：障碍按概率转为浮空形态
+     （20% 起步、64 拍爬到 40% 封顶）——悬在节拍点高度，贴地通过安全、起跳撞上即死
+     （「别跳」的反向考验）。
    浮空与否用确定性散列 beatRand(i) 决定——同一拍永远同一结果，函数保持纯函数。 */
 
 // 256 拍后：循环极难段（后期难度稳定在最高档）
@@ -228,11 +233,11 @@ function beatRand(i) {
   return ((x ^ (x >>> 15)) >>> 0) / 4294967296;
 }
 
-// 浮空概率：第 floatingStartBeat 拍起线性爬坡，floatingRampBeats 拍后封顶
+// 浮空概率：从 floatingBaseChance（开局就有）线性爬坡，floatingRampBeats 拍后到上限
 function floatingChanceAt(i) {
   if (i < CONFIG.floatingStartBeat) return 0;
-  return CONFIG.floatingMaxChance *
-    Math.min(1, (i - CONFIG.floatingStartBeat) / CONFIG.floatingRampBeats);
+  const k = Math.min(1, (i - CONFIG.floatingStartBeat) / CONFIG.floatingRampBeats);
+  return CONFIG.floatingBaseChance + (CONFIG.floatingMaxChance - CONFIG.floatingBaseChance) * k;
 }
 
 // 该拍是否命中浮空概率（最终还要过「前拍约束」）
@@ -744,7 +749,7 @@ const S = {
   bonusUntil: -Infinity,    // 本次奖励时间结束时刻（必须 -Infinity：开局 leadIn 期间 songTime 为负）
   bonusOn: false,           // 上一帧是否处于奖励时间（用于「结束」播报）
   lastNoteArrival: -Infinity, // 上一个节拍点到达时刻（防止窗口开启瞬间双押）
-  nextBlueAt: CONFIG.blueStartSec, // 下一根蓝色巨障的排布时刻（1:30 前不排）
+  nextBlueAt: CONFIG.blueStartSec, // 下一根蓝色巨障的排布时刻（开局 30 秒前不排）
   shieldUntil: -Infinity,   // 护盾生效截止时刻（-Infinity = 无盾）
   shieldReadyAt: -Infinity, // 下次可以开盾的时刻（冷却）
   blueRetryFrom: -Infinity, // 本次排布尝试的起始时刻（blueRetryLimit 用）
@@ -933,7 +938,7 @@ function spawnNote() {
 }
 
 // —— 蓝色巨障（2026-09-20 新增）——
-// 1:30 之后随机出现（间隔 blueMinGap~blueMaxGap 秒），跳不过去，只能开盾撞破。
+// 开局 30 秒后随机出现（间隔 blueMinGap~blueMaxGap 秒），跳不过去，只能开盾撞破。
 // 排布时不进节拍表（patternForBeat 是纯函数，不能掺时间条件），但到达时刻会提前
 // blueLead 秒登记进 obstacleTimes —— 节拍点避让只在生成时查一次表，早于登记生成的
 // 节拍点由 blueLead ≥ noteGapAfter(0.5) 保证落在避让窗口之外，不会出现「同一个位置
@@ -981,13 +986,13 @@ function spawnBlueObstacle() {
   S.nextBlueAt = t + CONFIG.blueMinGap + Math.random() * (CONFIG.blueMaxGap - CONFIG.blueMinGap);
   if (!S.blueSeen) { // 首次出现播报一次（之后不再刷）
     S.blueSeen = true;
-    addText(touchUI() ? '蓝色巨障！点右下按钮开盾' : '蓝色巨障！按 Q 开盾',
+    addText(touchUI() ? '蓝色巨障！点左下按钮开盾' : '蓝色巨障！按 K 开盾',
       playerX, groundY - squareSize * 4.2, CONFIG.blueObstacleColor);
   }
 }
 
 // 护盾（2026-09-20 新增）：随时可按，持续 shieldDuration 秒；
-// 冷却从「按下」算起 shieldCooldown 秒（= 3 秒护盾 + 1 秒空窗），
+// 冷却从「按下」算起 shieldCooldown 秒（= 1.5 秒护盾 + 2.5 秒空窗），
 // 不是「失效后再等 4 秒」——误按的代价被压到最小。
 function activateShield() {
   if (S.phase !== 'playing') return;
@@ -1460,10 +1465,10 @@ function updateHud() {
   let stText, stCls;
   if (shieldLeft > 0) { stText = '护盾 ' + shieldLeft.toFixed(1) + ' 秒'; stCls = 'on'; }
   else if (readyLeft > 0) { stText = '护盾冷却 ' + readyLeft.toFixed(1) + ' 秒'; stCls = 'cool'; }
-  else { stText = touchUI() ? '护盾就绪 · 点右下按钮' : '护盾就绪 · 按 Q'; stCls = 'ready'; }
+  else { stText = touchUI() ? '护盾就绪 · 点左下按钮' : '护盾就绪 · 按 K'; stCls = 'ready'; }
   if (playing) {
     const blueNear = S.entities.some((e) => e.blue);
-    if (blueNear && stCls === 'ready') { stText = '按 Q 开盾！撞破蓝色巨障'; stCls = 'alert'; }
+    if (blueNear && stCls === 'ready') { stText = '按 K 开盾！撞破蓝色巨障'; stCls = 'alert'; }
     if (shieldStateEl.textContent !== stText) shieldStateEl.textContent = stText;
     shieldStateEl.className = 'show ' + stCls;
   } else if (shieldStateEl.className !== '') {
@@ -1842,9 +1847,9 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
     e.preventDefault();
     pressJump();
-  } else if (e.code === 'KeyQ') {
+  } else if (e.code === 'KeyK') {
     e.preventDefault();
-    activateShield(); // 护盾：电脑端 Q 键（CLAUDE.md 第三章）
+    activateShield(); // 护盾：电脑端 K 键（CLAUDE.md 第三章）
   } else if (e.code === 'Enter') {
     if (S.phase === 'over') restartGame();
     else if (S.phase === 'menu') startFromButton();
