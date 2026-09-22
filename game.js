@@ -69,8 +69,12 @@ const CONFIG = {
   bonusAtSec: [60, 120, 180],  // 触发时刻（歌内秒数，一局共三次，之后不再给）
   bonusDuration: 15,           // 奖励时间时长（秒）
   bonusClearMargin: 0.2,       // 窗口末尾额外清障余量（秒）：障碍碰撞半宽 = 0.9×方块尺寸，
-                               // 换算成时间最大约 0.17 秒（手机竖屏），不加会出现
-                               // 「窗口结束前几十毫秒被末尾障碍撞死」的判定
+                               // 换算成时间 = 半宽 × 飞行时长 ÷ (W−playerX)，最大约 0.165 秒
+                               // （最窄手机 + 方块尺寸封顶），不加会出现「窗口结束前几十
+                               // 毫秒被末尾障碍撞死」的判定。
+                               // 2026-09-22 加速后不用改：该比值对飞行时长单调递增，全场
+                               // 最大值就出现在起步速度（三个真实窗口末尾实测 0.119 秒）。
+                               // 约束：只有把 travelTimeStart 抬到 1.21 秒以上才需要同步放大它
   bonusNoteSpawnMin: 0.5,      // 奖励时间内节拍点间隔下限（= 跳跃时长，一跳接一跳）
   bonusNoteSpawnMax: 0.8,      // 奖励时间内节拍点间隔上限（平时 0.7~1.4）
   bonusStarChance: 0.3,        // 奖励时间内星形概率（平时 starChance = 0.15）
@@ -85,8 +89,13 @@ const CONFIG = {
   stage4Beats: 64,          // 极难：192-255 拍（之后循环极难段）
   eventBeats: 320,          // 预计算的音乐事件总拍数（约 2 分 40 秒）
 
-  // —— 实体飞行（匀速：难度不再靠加速，改由障碍承担）——
-  travelTime: 1.0,          // 元素从屏幕右缘飞到方块处固定 1 秒
+  // —— 实体飞行（2026-09-22 改：速度随时间加快）——
+  // 本项目的「速度」是派生量（speedNow = 距离 ÷ 飞行时长），所以「加速」的正确表达
+  // 就是让飞行时长变短。元素一旦出生就把当时的时长烘进自己的 dur（见 spawnUpcoming），
+  // 飞行中不再被改速——所以画面不会跳位，到达时刻也仍然精确。
+  travelTimeStart: 1.0,     // 开局：元素从屏幕右缘飞到方块处 1 秒
+  travelTimeEnd: 0.667,     // 90 秒后封顶 0.667 秒（等效速度 ×1.5），之后不再变快
+  travelRampSec: 90,        // 加速爬坡时长（歌内秒数）
   noteOffset: 0.1,          // 障碍到达比鼓点晚 0.1 秒（视觉对齐）；
                             // 随机节拍点的判定时刻 = 到达时刻 − 此值（视觉接触前 0.1 秒按键 = Perfect）
 
@@ -107,10 +116,12 @@ const CONFIG = {
   blueMinGap: 5,             // 出现间隔下限（秒）：不宜再低于护盾冷却（4 秒），
                              // 否则「看到蓝墙就按 K」会来不及（5 秒时余量 1 秒）
   blueMaxGap: 9,             // 出现间隔上限（秒）
-  blueLead: 0.7,             // 到达时刻的提前量（秒）：≥ noteGapAfter，节拍点才躲得开；
-                             // 并进飞行时长（见 spawnBlueObstacle），不是提前站在右缘。
-                             // 飞行时长 travelTime+blueLead = 1.7 秒 > shieldDuration，
-                             // 这是「看到蓝墙要稍等再按」的由来
+  blueFlight: 1.7,           // 蓝墙从右缘到撞击的固定飞行时长（秒）> shieldDuration(1.5)，
+                             // 这是「看到蓝墙要稍等再按」的由来。**蓝墙不参与加速**：
+                             // 无论世界多快它都飞满 1.7 秒，护盾时机窗口 [0.2, 1.7] 秒不变
+                             // （提前量由 blueLeadNow() 动态补足，红障碍加速多少就补回多少）
+  blueLeadMin: 0.5,          // blueLeadNow() 的下限（= noteGapAfter）。约束：
+                             // blueLeadMin ≤ blueFlight − travelTimeStart，否则「恒 1.7 秒」会降级
   blueHeightFactor: 3.6,     // 仅渲染用：碰撞对蓝墙一律致命（跳跃顶点 3×方块 → 跳不过去）
   blueWidthFactor: 1.1,      // 宽度 = 方块尺寸 × 1.1
   blueClearGap: 0.6,         // 与其它障碍到达时刻的最小间隔（防「刚跳完就要盾」）
@@ -132,6 +143,23 @@ const CONFIG = {
   songLoadTimeout: 12,       // 歌曲加载超时（秒）：超时先放行（用合成音乐开打），
                              // 数据到位后自动换上——避免 CDN 慢/不通时菜单被卡死
 };
+
+/* 已废弃字段的墓碑（2026-09-22 加速改动引入）。
+   删除字段后读到的是 undefined 而不是异常，而 undefined 在本文件里会静默地酿成
+   NaN：前瞻循环 `<= NaN` 恒假 → obstacleTimes 永远空 → 避让铁律整体失效（必死组合
+   回归，完全无声）；实体 dur 为 NaN → x 为 NaN → 既判定不了也回收不掉，变成隐形
+   不灭的节拍点。这两条都极难从现象倒推回原因，所以这里让遗留读取当场抛错。
+   生产路径已无任何读取（已通读全文件确认），真正触发时表现为「首帧定格 + 控制台
+   一条 error」（帧循环有 try/catch 兜底）——响亮总好过无声。等这次改名彻底沉淀后
+   可以整块删掉。 */
+Object.defineProperty(CONFIG, 'travelTime', {
+  configurable: true,
+  get() { throw new Error('CONFIG.travelTime 已废弃：改用 travelTimeNow()'); },
+});
+Object.defineProperty(CONFIG, 'blueLead', {
+  configurable: true,
+  get() { throw new Error('CONFIG.blueLead 已废弃：改用 blueLeadNow()'); },
+});
 
 /* ---------- 1.5 背景音乐曲库（2026-09-03 新增：音乐选择弹窗里切换） ---------- */
 // 每首歌独立内嵌（见 song-data*.js）；数据**按需加载**——只有被选中的歌才注入数据脚本、
@@ -192,7 +220,8 @@ function beatTime(i) {
 }
 
 /* ---------- 3. 关卡生成（每一拍的障碍安排，纯函数） ----------
-   难度递进（CLAUDE.md 第五章：移动匀速，难度由障碍数量与浮空障碍承担）：
+   难度递进（CLAUDE.md 第五章：难度由「前进速度爬坡 + 障碍数量 + 浮空概率」三者共同
+   承担；这张表只管障碍数量那条线——速度爬坡见 travelTimeNow()）：
      简单（0-63 拍）：每 12 拍一个障碍（b%12=6）
      中等（64-127 拍）：每 8 拍两个障碍（k=2、k=6）
      困难（128-191 拍）：每 8 拍三个障碍（k=2、k=3 连拍、k=6）
@@ -810,10 +839,27 @@ function pressJump() {
   else S.jumpBufferUntil = songTime() + CONFIG.jumpBuffer;
 }
 
-// 当前世界速度：全程匀速（元素从右缘飞到方块处固定 travelTime 秒，
-// 难度不再靠加速，改由障碍数量与浮空障碍承担）
+// 当前飞行时长（秒）：开局 travelTimeStart，在 travelRampSec 秒内线性缩到 travelTimeEnd
+// 后封顶——这就是「方块移动速度随时间加快」。t 可传（同帧复用同一个时钟值，保证
+// 「声明的到达时刻」与「实体真实到达时刻 start+dur」逐位一致；不传则现取 songTime()）。
+function travelTimeNow(t) {
+  const now = t === undefined ? songTime() : t;
+  const k = Math.min(1, Math.max(0, now) / CONFIG.travelRampSec); // max(0,·) 兜住 leadIn 的负 songTime
+  return CONFIG.travelTimeStart + (CONFIG.travelTimeEnd - CONFIG.travelTimeStart) * k;
+}
+
+// 蓝墙的到达提前量：让总飞行时长恒为 blueFlight（1.7 秒），不随加速变快。
+// 于是恒等式 travelTimeNow() + blueLeadNow() ≡ blueFlight 成立——护盾时机窗口
+// [0.2, 1.7] 秒在任何速度下都一样，前瞻窗口 t + travelTimeNow() + ahead 也恒等于
+// t + 2.3（与改动前逐位相同，所以蓝墙的落点决策完全没有变化）。
+function blueLeadNow(t) {
+  return Math.max(CONFIG.blueLeadMin, CONFIG.blueFlight - travelTimeNow(t));
+}
+
+// 当前世界速度（px/s）：派生量——横穿 0.75 屏宽耗时 travelTimeNow() 秒，
+// 所以手机与电脑的「飞行时长」一致、像素速度随屏宽等比变化。
 function speedNow() {
-  return (W - playerX) / CONFIG.travelTime;
+  return (W - playerX) / travelTimeNow();
 }
 
 // —— 奖励时间（2026-09-20 新增）——
@@ -826,7 +872,7 @@ function bonusActive(t) { return t < S.bonusUntil; } // t = songTime()
 function startBonus(t) {
   S.bonusStart = t;
   S.bonusUntil = t + CONFIG.bonusDuration;
-  // 场上障碍立即清空：此刻在飞的障碍到达时刻必然 < 窗口结束（飞行仅 1 秒），
+  // 场上障碍立即清空：此刻在飞的障碍到达时刻必然 < 窗口结束（飞行最多 1 秒），
   // 全部属于窗口内，删掉即与 spawnUpcoming 的抑制条件一致
   S.entities = S.entities.filter((e) => e.type !== 'obstacle');
   if (S.nextNoteAt > t) S.nextNoteAt = t; // 立刻开始生成节拍点，不空等最多 1.4 秒
@@ -851,15 +897,17 @@ function updateBonus(t) {
 }
 
 // 按到达时间反推出生时间，到点就把该拍的障碍放进屏幕（节拍点改由 spawnNote 随机生成）。
-// 同时前瞻扫描未来 travelTime + 间隙内的障碍到达时刻，登记给随机节拍点避让查询。
+// 同时前瞻扫描未来「飞行时长 + 间隙」内的障碍到达时刻，登记给随机节拍点避让查询。
 // 前瞻与主循环各自链式调用纯函数 patternForBeat：起点一致、顺序一致 → 结果必然一致。
 function spawnUpcoming() {
   const t = songTime();
+  // 本帧的飞行时长：整帧只求值一次再复用，保证「出生时刻 + dur」与登记的到达时刻逐位一致
+  // （travelTimeNow 内部要读 songTime()，而音频时钟按渲染量子跳，同帧两次调用可能差一个量子）
+  const TT = travelTimeNow(t);
   while (true) {
     const b = S.spawnIndex;
     const arrival = beatTime(b) + CONFIG.noteOffset;
-    const travelT = (W - playerX) / speedNow();
-    const spawnT = arrival - travelT;
+    const spawnT = arrival - TT;
     if (t < spawnT) break;
     const p = patternForBeat(b, S.lastPat); // 前拍结果用于浮空障碍的公平性约束
     S.lastPat = p;
@@ -872,19 +920,21 @@ function spawnUpcoming() {
     const suppressed = p.obstacle && arrival >= S.bonusStart &&
       arrival < S.bonusUntil + CONFIG.bonusClearMargin;
     if (p.obstacle && !suppressed) {
-      S.entities.push({ type: 'obstacle', float: p.float, start: spawnT, dur: travelT });
+      S.entities.push({ type: 'obstacle', float: p.float, start: spawnT, dur: TT });
     }
     S.spawnIndex++;
     if (S.spawnIndex > 100000) break; // 保险丝
   }
   // 障碍到达时间前瞻（供 spawnNote 避让、蓝色巨障错开；覆盖候选节拍点可能的全部冲突区间）。
-  // 前瞻范围要比「节拍点需要的 travelTime + gap」更远一点：蓝色巨障的到达时刻提前
-  // blueLead 登记，还要与它前后 blueClearGap 内的障碍错开——只扫到 t+1.65 的话，
-  // 落在 (t+1.65, t+2.3] 的障碍查不到，蓝墙可能正好贴着一根红障碍到达。
+  // 前瞻范围要比「节拍点需要的飞行时长 + gap」更远一点：蓝墙还要与它前后 blueClearGap
+  // 内的障碍错开——只扫到 t+1.65 的话，落在 (t+1.65, t+2.3] 的障碍查不到，蓝墙可能
+  // 正好贴着一根红障碍到达。
+  // 注意 t + TT + ahead 恒等于 t + 2.3：TT 缩小多少、blueLeadNow() 就补回多少
+  // （travelTimeNow + blueLeadNow ≡ blueFlight），所以前瞻视野与加速无关、逐位不变。
   // 多登记的条目对节拍点避让没有影响（冲突判定只看到达窗口内那几条）。
   const gap = Math.max(CONFIG.noteGapBefore, CONFIG.noteGapAfter);
-  const ahead = Math.max(gap, CONFIG.blueClearGap + CONFIG.blueLead);
-  while (beatTime(S.lookaheadIndex) + CONFIG.noteOffset <= t + CONFIG.travelTime + ahead) {
+  const ahead = Math.max(gap, CONFIG.blueClearGap + blueLeadNow(t));
+  while (beatTime(S.lookaheadIndex) + CONFIG.noteOffset <= t + TT + ahead) {
     const p = patternForBeat(S.lookaheadIndex, S.lookaheadPat);
     S.lookaheadPat = p;
     if (p.obstacle) S.obstacleTimes.push(beatTime(S.lookaheadIndex) + CONFIG.noteOffset);
@@ -906,7 +956,8 @@ function spawnNote() {
   while (S.obstacleTimes.length && S.obstacleTimes[0] < t - gap) S.obstacleTimes.shift();
   if (t < S.nextNoteAt) return;
   const inBonus = bonusActive(t);
-  const A = t + CONFIG.travelTime; // 候选到达时刻（立即从右缘出生）
+  const TT = travelTimeNow(t); // 同帧复用同一个值（见 spawnUpcoming 的同名变量）
+  const A = t + TT; // 候选到达时刻（立即从右缘出生）
   // 奖励时间内 obstacleTimes 里「窗口末尾 + 余量」之前的登记项是幽灵（对应障碍已被
   // 抑制），跳过；窗口之后的登记项照常避让——否则窗口最后一刻生成的节拍点会与
   // 「窗口后第一根障碍」撞车（踩点与起跳互斥，必死）。阈值与 spawnUpcoming 的抑制
@@ -928,7 +979,7 @@ function spawnNote() {
   const isStar = Math.random() < (inBonus ? CONFIG.bonusStarChance : CONFIG.starChance);
   S.entities.push({
     type: isStar ? 'star' : 'note',
-    start: t, dur: CONFIG.travelTime, judged: false,
+    start: t, dur: TT, judged: false,
     beatT: A - CONFIG.noteOffset, // 视觉接触前 0.1 秒按键 = Perfect（与原手感一致）
   });
   S.lastNoteArrival = A;
@@ -940,14 +991,17 @@ function spawnNote() {
 // —— 蓝色巨障（2026-09-20 新增）——
 // 开局 30 秒后随机出现（间隔 blueMinGap~blueMaxGap 秒），跳不过去，只能开盾撞破。
 // 排布时不进节拍表（patternForBeat 是纯函数，不能掺时间条件），但到达时刻会提前
-// blueLead 秒登记进 obstacleTimes —— 节拍点避让只在生成时查一次表，早于登记生成的
-// 节拍点由 blueLead ≥ noteGapAfter(0.5) 保证落在避让窗口之外，不会出现「同一个位置
-// 既要踩点又要撞盾」。落点还要与其它障碍错开 blueClearGap，并躲开奖励时间窗口。
+// blueLeadNow() 秒登记进 obstacleTimes —— 节拍点避让只在生成时查一次表，早于登记
+// 生成的节拍点由几何关系保证落在避让窗口之外（登记前生成的节拍点到达时刻
+// ≤ t + travelTimeStart = t + 1.0，而蓝墙避让窗口下界是 arrival − noteGapBefore
+// = t + blueFlight − 0.65 = t + 1.05，1.0 < 1.05 恰好让开；加速后这个余量还会变大，
+// blueLeadMin 则确保 blueLeadNow() 永不塌到破坏该关系的程度）。
+// 落点还要与其它障碍错开 blueClearGap，并躲开奖励时间窗口。
 function spawnBlueObstacle() {
   const t = songTime();
   if (S.phase !== 'playing' || t < S.nextBlueAt) return;
-  const travelT = (W - playerX) / speedNow(); // === CONFIG.travelTime（恒定）
-  const arrival = t + travelT + CONFIG.blueLead;
+  const TT = travelTimeNow(t);
+  const arrival = t + CONFIG.blueFlight; // ≡ t + TT + blueLeadNow()：总飞行时长恒 1.7 秒
   // 奖励时间（含窗口末尾的清障余量与结束后的静默期）：窗口内必须一个障碍都没有
   if (arrival < S.bonusUntil + CONFIG.bluePostBonusGrace) {
     S.nextBlueAt = S.bonusUntil + CONFIG.bluePostBonusGrace;
@@ -977,8 +1031,9 @@ function spawnBlueObstacle() {
   }
   S.blueRetryFrom = -Infinity;
   // 「减速飞行」而非「提前站在右缘」：render 会把 p 钳在 Math.max(0,…)，提前出生的
-  // 话方块会在右缘静止 blueLead 秒，看起来像卡死。并进 dur 则匀速飞完、到达时刻不变。
-  S.entities.push({ type: 'obstacle', blue: true, start: t, dur: travelT + CONFIG.blueLead });
+  // 话巨柱会在右缘静止 blueLeadNow() 秒，看起来像卡死。并进 dur 则按出生时的速度
+  // 飞完、到达时刻不变（start + dur 恒等于 arrival = t + blueFlight）。
+  S.entities.push({ type: 'obstacle', blue: true, start: t, dur: TT + blueLeadNow(t) });
   // obstacleTimes 不保证严格升序（下一帧前瞻仍可能压入更小的到达时刻），按序插入最稳
   let k = S.obstacleTimes.length;
   while (k > 0 && S.obstacleTimes[k - 1] > arrival) k--;
