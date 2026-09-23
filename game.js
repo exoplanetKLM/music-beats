@@ -14,7 +14,7 @@
      1. 配置常量（所有可调数值集中在这里）
      2. 节拍时间表（歌曲模式：按节拍分析的拍表；降级模式：BPM 120）
      3. 关卡生成（每一拍安排什么：地面障碍 / 浮空障碍）+ 随机节拍点生成器
-     4. 音乐引擎（歌曲模式：三首内嵌 MP3 可切换 + 各自节拍分析对齐循环；
+     4. 音乐引擎（歌曲模式：18 首内嵌 MP3 可切换，数据按需加载 + 各自节拍分析对齐循环；
                  降级模式：Web Audio 程序合成 + 预计算事件表）
      5. 游戏状态与实体
      6. 更新逻辑（物理 / 判定 / 计分 / 死亡）
@@ -114,7 +114,7 @@ const CONFIG = {
   shieldColor: '#d8f6ff',    // 护盾光环
   blueStartSec: 30,          // 30 秒之后开始出现（歌内秒数；原为 90）
   blueMinGap: 5,             // 出现间隔下限（秒）：不宜再低于护盾冷却（4 秒），
-                             // 否则「看到蓝墙就按 K」会来不及（5 秒时余量 1 秒）
+                             // 否则「看到蓝墙就按 A」会来不及（5 秒时余量 1 秒）
   blueMaxGap: 9,             // 出现间隔上限（秒）
   blueFlight: 1.7,           // 蓝墙从右缘到撞击的固定飞行时长（秒）> shieldDuration(1.5)，
                              // 这是「看到蓝墙要稍等再按」的由来。**蓝墙不参与加速**：
@@ -171,7 +171,34 @@ const SONGS = [
   { id: 'sexy-love', name: 'Sexy Love（T-ara）', file: 'song-data-sexy-love.js', data: () => window.SONG_DATA_SEXY_LOVE },
   { id: 'shattered', name: '纠缠Shattered（叶自冉）', file: 'song-data-shattered.js', data: () => window.SONG_DATA_SHATTERED },
   { id: 'flower', name: 'flower.（LYVET李维特）', file: 'song-data-flower.js', data: () => window.SONG_DATA_FLOWER },
+  // —— 2026-09-23 扩到 18 首（新的追加在末尾：mj-songpick-test 有两条断言依赖前 5 首的顺序）——
+  // id 是 localStorage 最高分键（musicJumpBestScore:<id>）的一部分，定了就不要再改，改 = 玩家丢分。
+  // file 必须同时等于磁盘文件名、build-single.js 子集里的名字，且**两首歌不能共用同一个 file**
+  // （加载器的 injected 表以文件名为键，共用会串号）。
+  { id: 'lovey-dovey', name: 'Lovey-Dovey（T-ara）', file: 'song-data-lovey-dovey.js', data: () => window.SONG_DATA_LOVEY_DOVEY },
+  { id: 'falling-u', name: 'Falling U（T-ara）', file: 'song-data-falling-u.js', data: () => window.SONG_DATA_FALLING_U },
+  { id: 'gee', name: 'Gee（少女时代）', file: 'song-data-gee.js', data: () => window.SONG_DATA_GEE },
+  { id: 'what-is-love', name: 'What is Love（TWICE）', file: 'song-data-what-is-love.js', data: () => window.SONG_DATA_WHAT_IS_LOVE },
+  { id: 'uh-oh', name: 'Uh-Oh（i-dle）', file: 'song-data-uh-oh.js', data: () => window.SONG_DATA_UH_OH },
+  { id: 'universe', name: '给你宇宙（脸红的思春期）', file: 'song-data-universe.js', data: () => window.SONG_DATA_UNIVERSE },
+  { id: 'tsugihagi', name: '拼凑的断音（初音未来）', file: 'song-data-tsugihagi.js', data: () => window.SONG_DATA_TSUGIHAGI },
+  { id: 'firefly', name: '夜、萤火虫和你（AniFace）', file: 'song-data-firefly.js', data: () => window.SONG_DATA_FIREFLY },
+  { id: 'dream-light', name: '梦的光点（王心凌）', file: 'song-data-dream-light.js', data: () => window.SONG_DATA_DREAM_LIGHT },
+  { id: 'sweet-dream', name: '美梦（周公）', file: 'song-data-sweet-dream.js', data: () => window.SONG_DATA_SWEET_DREAM },
+  { id: 'day-by-day', name: 'DAY BY DAY（T-ara）', file: 'song-data-day-by-day.js', data: () => window.SONG_DATA_DAY_BY_DAY },
+  { id: 'roly-poly', name: 'Roly-Poly（T-ara）', file: 'song-data-roly-poly.js', data: () => window.SONG_DATA_ROLY_POLY },
+  { id: 'angel', name: 'ANGEL（尹美莱/Tiger JK/Bizzy）', file: 'song-data-angel.js', data: () => window.SONG_DATA_ANGEL },
 ];
+
+// 单文件版（build-single.js）只内嵌一部分歌曲，会把可用的 id 列进 window.__SINGLE_SONG_IDS。
+// 网页版没有这个全局，18 首全可用。过滤掉的行不进弹窗——否则「点了却没反应、静默回退 No.9」
+// 那种困惑非常难自查。启动时另有守卫：存档曲目若不在表内会回落到 no9（见文件末尾的启动段）。
+if (Array.isArray(window.__SINGLE_SONG_IDS)) {
+  const singleOnly = window.__SINGLE_SONG_IDS;
+  for (let i = SONGS.length - 1; i >= 0; i--) {
+    if (singleOnly.indexOf(SONGS[i].id) < 0) SONGS.splice(i, 1);
+  }
+}
 
 // 数据脚本按需加载（2026-09-21）。三条放行路径，保证「没有加载器」时行为与从前一致：
 //   · 单文件产物：build-single.js 把 __loadSongScript 短路成 Promise.resolve(true)；
@@ -1041,7 +1068,7 @@ function spawnBlueObstacle() {
   S.nextBlueAt = t + CONFIG.blueMinGap + Math.random() * (CONFIG.blueMaxGap - CONFIG.blueMinGap);
   if (!S.blueSeen) { // 首次出现播报一次（之后不再刷）
     S.blueSeen = true;
-    addText(touchUI() ? '蓝色巨障！点左下按钮开盾' : '蓝色巨障！按 K 开盾',
+    addText(touchUI() ? '蓝色巨障！点左下按钮开盾' : '蓝色巨障！按 A 开盾',
       playerX, groundY - squareSize * 4.2, CONFIG.blueObstacleColor);
   }
 }
@@ -1520,10 +1547,10 @@ function updateHud() {
   let stText, stCls;
   if (shieldLeft > 0) { stText = '护盾 ' + shieldLeft.toFixed(1) + ' 秒'; stCls = 'on'; }
   else if (readyLeft > 0) { stText = '护盾冷却 ' + readyLeft.toFixed(1) + ' 秒'; stCls = 'cool'; }
-  else { stText = touchUI() ? '护盾就绪 · 点左下按钮' : '护盾就绪 · 按 K'; stCls = 'ready'; }
+  else { stText = touchUI() ? '护盾就绪 · 点左下按钮' : '护盾就绪 · 按 A'; stCls = 'ready'; }
   if (playing) {
     const blueNear = S.entities.some((e) => e.blue);
-    if (blueNear && stCls === 'ready') { stText = '按 K 开盾！撞破蓝色巨障'; stCls = 'alert'; }
+    if (blueNear && stCls === 'ready') { stText = '按 A 开盾！撞破蓝色巨障'; stCls = 'alert'; }
     if (shieldStateEl.textContent !== stText) shieldStateEl.textContent = stText;
     shieldStateEl.className = 'show ' + stCls;
   } else if (shieldStateEl.className !== '') {
@@ -1795,6 +1822,10 @@ function openSongModal() {
   showModal(songModalEl, $('music-ok'));
   refreshSongUI();              // 打开瞬间同步：最高分可能在结算后变了（须在 showModal 之后，
                                 // 否则 .picked 的渲染判定还看不到「弹窗已打开」）
+  // 18 首后列表要内滚：当前曲目若排在十几行，打开弹窗看到的是前几行，高亮完全在视野外。
+  // 必须守卫 scrollIntoView——无头测试桩的 makeEl 没有这个方法，不守卫会在启动路径上抛错。
+  const cur = S.songRowEls[musicPickId] && S.songRowEls[musicPickId].row;
+  if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: 'nearest' });
 }
 // 取消路径（✕ / 遮罩 / Esc / 开局）：关闭即丢弃待确认项（靠下次打开时重新起算，见下）。
 // 这里刻意不重置 musicPickId——关闭那一刻 AudioEngine.songId 还可能没更新
@@ -1899,12 +1930,16 @@ window.addEventListener('keydown', (e) => {
     }
     return;
   }
-  if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
+  // 带 Ctrl / Alt / Cmd 的一律当作浏览器快捷键，不喂给游戏。空格、↑、W、J、A 都是裸键，
+  // 不加这道守卫的话 Ctrl+A（全选）会被当成开盾吞掉。
+  if (e.ctrlKey || e.altKey || e.metaKey) return;
+  // 跳跃：J 是 2026-09-23 新增的主键（右手），空格 / ↑ / W 作为旧键保留
+  if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW' || e.code === 'KeyJ') {
     e.preventDefault();
     pressJump();
-  } else if (e.code === 'KeyK') {
+  } else if (e.code === 'KeyA' || e.code === 'KeyK') {
     e.preventDefault();
-    activateShield(); // 护盾：电脑端 K 键（CLAUDE.md 第三章）
+    activateShield(); // 护盾：电脑端 A 键为主（2026-09-23 新增，左手），K 作为旧键保留
   } else if (e.code === 'Enter') {
     if (S.phase === 'over') restartGame();
     else if (S.phase === 'menu') startFromButton();

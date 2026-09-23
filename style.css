@@ -108,15 +108,17 @@ canvas { position: fixed; inset: 0; display: block; }
   display: flex; flex-direction: column; align-items: center; gap: 12px;
 }
 #menu-row { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 12px; }
-/* 音乐选择按钮上带当前曲名（最长「音乐选择 · 纠缠Shattered（叶自冉）」实测约 311px），
-   360px 手机上必须整条显示：字号/字距/内边距各收一档、上限放到 94vw；
-   更窄的机型（320px）仍由省略号兜底 */
+/* 音乐选择按钮上带当前曲名。360px 手机上可用内容宽只有 94vw−32 ≈ 334px：
+   原来靠「字号/字距各收一档 + nowrap + 省略号」硬撑，5 首时够用；2026-09-23 加到 18 首后
+   最长的「音乐选择 · ANGEL（尹美莱/Tiger JK/Bizzy）」要 364px，实测字号与字距再怎么收都
+   压不进 334px——只有**允许折行**能让它整条显示（实测折行后 332px，正好放下）。
+   折行是通解：以后再加长曲名也不会被截断，且不必牺牲字号或歌名信息。 */
 #btn-music {
   border-color: rgba(0, 229, 255, 0.45);
   box-shadow: 0 0 12px rgba(0, 229, 255, 0.18);
   padding: 12px 16px; font-size: 0.95rem; letter-spacing: 0.06em;
   max-width: min(94vw, 380px);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  white-space: normal; line-height: 1.3;
 }
 #btn-music.loading { cursor: wait; opacity: 0.75; }
 
@@ -124,24 +126,39 @@ canvas { position: fixed; inset: 0; display: block; }
    行由 game.js 按 SONGS 生成，一次建好后只改文案与 class（绝不重建，重建会丢焦点）。 */
 #song-rows {
   display: flex; flex-direction: column; gap: 8px; width: 100%;
-  /* 以后加到第 4、5 首时列表内滚，卡片不会顶出屏幕；3 首时不触发滚动 */
+  /* 2026-09-23 曲库扩到 18 首后这里才真正开始滚：内容高约 1072px，一屏可见约 5.5 行。
+     5 首以内不触发滚动（列表高 320px 正好放得下）。 */
   max-height: min(52vh, 320px);
   overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y;
+  scrollbar-width: thin;                       /* Firefox */
+  scrollbar-color: #3a3f6a transparent;
 }
+/* 18 行才第一次露出来的滚动条：默认样式在 440px 的卡片里又宽又亮，压一压 */
+#song-rows::-webkit-scrollbar { width: 6px; }
+#song-rows::-webkit-scrollbar-track { background: transparent; }
+#song-rows::-webkit-scrollbar-thumb { background: #3a3f6a; border-radius: 3px; }
+#song-rows::-webkit-scrollbar-thumb:hover { background: #5a5f8a; }
 /* 两行式：歌名独占一行（长歌名如「纠缠Shattered（叶自冉）」实测 187px，
    与「使用中」胶囊挤在一行只剩 133px 必被截断），第二行放胶囊与最高分 */
 .song-row {
   display: flex; flex-direction: column; align-items: stretch; gap: 2px;
   width: 100%; min-height: 52px; padding: 8px 14px; /* ≥44px = 手指点击目标下限 */
+  /* flex-shrink:0 不可省（2026-09-23 修）：#song-rows 是带 max-height 的 flex 列容器，
+     18 行内容远超上限时会**压缩 flex 项**——min-height 只挡住行高，行内的子元素照样被挤，
+     而歌名带 overflow:hidden，字形上半截就被裁掉了（5 首时内容 292px 不到上限，所以不压缩，
+     这个坑一直藏着，扩到 18 首才暴露）。让行不收缩 + 列表滚动，才是滚动列表的正解。 */
+  flex-shrink: 0;
   font-family: inherit; text-align: left; cursor: pointer;
   color: #8a8fb8; background: transparent;
   border: 1.5px solid #3a3f6a; border-radius: 12px;
   transition: all 0.15s ease;
 }
-.song-row-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.song-row-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-shrink: 0; }
 .song-row:hover { color: #c8cbe8; border-color: #5a5f8a; }
 .song-row-name {
-  flex: 1 1 auto; min-width: 0; /* min-width:0 不可省，否则省略号不生效 */
+  /* flex-shrink:0：列方向容器里 flex-grow 管的是**高度**、宽度由父级 align-items:stretch 给，
+     所以原来写的 flex:1 1 auto 对宽度毫无作用，反而让名字在行被压缩时被挤扁、字形裁掉 */
+  flex: 0 0 auto; min-width: 0; /* min-width:0 不可省，否则省略号不生效 */
   font-size: 0.98rem; letter-spacing: 0.04em;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
